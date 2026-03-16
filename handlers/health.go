@@ -4,14 +4,15 @@ import (
 	"context"
 	"net/http"
 
+	"cloud.google.com/go/firestore"
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/services"
 )
 
 func HealthCheck(c *gin.Context) {
 	ctx := context.Background()
-	
-	err := services.FirestoreClient.RunTransaction(ctx, func(ctx context.Background(), tx *services.firestore.Transaction) error {
+
+	err := services.FirestoreClient.RunTransaction(ctx, func(ctx context.Background(), tx *firestore.Transaction) error {
 		return nil
 	})
 

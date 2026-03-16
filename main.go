@@ -27,6 +27,7 @@ func main() {
 	}))
 
 	r.POST("/waitlist", handlers.JoinWaitlist)
+	r.GET("/health", handlers.HealthCheck)
 
 	port := os.Getenv("PORT")
 	if port == "" {
