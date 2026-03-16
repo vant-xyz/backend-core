@@ -28,7 +28,7 @@ func JoinWaitlist(c *gin.Context) {
 	}
 
 	referralCode := GenerateReferralCode()
-	alreadyExists, err := db.SaveWaitlistEntry(c.Request.Context(), req.Email, referralCode, req.ReferralCode)
+	alreadyExists, code, err := db.SaveWaitlistEntry(c.Request.Context(), req.Email, referralCode, req.ReferralCode)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
@@ -46,7 +46,7 @@ func JoinWaitlist(c *gin.Context) {
 		return
 	}
 
-	go services.SendWaitlistEmail(req.Email, referralCode)
+	go services.SendWaitlistEmail(req.Email, code)
 
 	c.JSON(http.StatusOK, models.WaitlistResponse{
 		Success: true,
