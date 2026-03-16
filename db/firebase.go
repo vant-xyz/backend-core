@@ -54,28 +54,35 @@ func SaveWaitlistEntry(ctx context.Context, email, referralCode, referredByCode 
 		return false, "", err
 	}
 
-	if referredByCode != "" && referredByCode != referralCode {
-		iter := Client.Collection("waitlist").Where("referral_code", "==", referredByCode).Limit(1).Documents(ctx)
-		for {
-			doc, err := iter.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Printf("Error finding referrer: %v", err)
-				break
-			}
-			
-			if doc.Data()["email"] != email {
-				doc.Ref.Update(ctx, []firestore.Update{
-					{Path: "referral_count", Value: firestore.Increment(1)},
-				})
-			}
-			break
-		}
+	return false, referralCode, nil
+}
+
+func TrackReferral(referredByCode, newUserEmail string) {
+	if referredByCode == "" {
+		return
 	}
 
-	return false, referralCode, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	iter := Client.Collection("waitlist").Where("referral_code", "==", referredByCode).Limit(1).Documents(ctx)
+	doc, err := iter.Next()
+	if err == iterator.Done {
+		return
+	}
+	if err != nil {
+		log.Printf("Error finding referrer: %v", err)
+		return
+	}
+
+	if doc.Data()["email"] != newUserEmail {
+		_, err := doc.Ref.Update(ctx, []firestore.Update{
+			{Path: "referral_count", Value: firestore.Increment(1)},
+		})
+		if err != nil {
+			log.Printf("Error updating referral count: %v", err)
+		}
+	}
 }
 
 func HealthCheck(ctx context.Context) error {
