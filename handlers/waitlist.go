@@ -46,6 +46,7 @@ func JoinWaitlist(c *gin.Context) {
 		return
 	}
 
+	go db.TrackReferral(req.ReferralCode, req.Email)
 	go services.SendWaitlistEmail(req.Email, code)
 
 	c.JSON(http.StatusOK, models.WaitlistResponse{
