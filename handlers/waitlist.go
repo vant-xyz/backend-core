@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/models"
 	"github.com/vant-xyz/backend-code/services"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func GenerateReferralCode() string {
@@ -26,8 +30,9 @@ func JoinWaitlist(c *gin.Context) {
 		return
 	}
 
-	var existingEmail string
-	err := services.DB.QueryRow("SELECT email FROM waitlist WHERE email = $1", req.Email).Scan(&existingEmail)
+	ctx := context.Background()
+	docRef := services.FirestoreClient.Collection("waitlist").Doc(req.Email)
+	_, err := docRef.Get(ctx)
 	if err == nil {
 		c.JSON(http.StatusOK, models.WaitlistResponse{
 			Success: true,
@@ -36,12 +41,22 @@ func JoinWaitlist(c *gin.Context) {
 		return
 	}
 
+	if status.Code(err) != codes.NotFound {
+		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
+			Success: false,
+			Message: "Database error",
+		})
+		return
+	}
+
 	referralCode := GenerateReferralCode()
 
-	_, err = services.DB.Exec(
-		"INSERT INTO waitlist (email, referral_code, referred_by) VALUES ($1, $2, $3)",
-		req.Email, referralCode, req.ReferralCode,
-	)
+	_, err = docRef.Set(ctx, map[string]interface{}{
+		"email":         req.Email,
+		"referral_code": referralCode,
+		"referred_by":   req.ReferralCode,
+		"created_at":    time.Now(),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
 			Success: false,

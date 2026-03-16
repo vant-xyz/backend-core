@@ -15,6 +15,7 @@ WORKDIR /app
 
 COPY --from=builder /app/main .
 COPY --from=builder /app/templates ./templates
+COPY --from=builder /app/serviceAccount.json ./serviceAccount.json
 
 EXPOSE 8080
 
