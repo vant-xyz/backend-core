@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -62,10 +63,13 @@ func TrackReferral(referredByCode, newUserEmail string) {
 		return
 	}
 
+	// Ensure code is uppercase to match our generated format
+	searchCode := strings.ToUpper(referredByCode)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	iter := Client.Collection("waitlist").Where("referral_code", "==", referredByCode).Limit(1).Documents(ctx)
+	iter := Client.Collection("waitlist").Where("referral_code", "==", searchCode).Limit(1).Documents(ctx)
 	doc, err := iter.Next()
 	if err == iterator.Done {
 		return
