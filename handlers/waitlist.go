@@ -31,36 +31,27 @@ func JoinWaitlist(c *gin.Context) {
 	}
 
 	ctx := context.Background()
-	docRef := services.FirestoreClient.Collection("waitlist").Doc(req.Email)
-	_, err := docRef.Get(ctx)
-	if err == nil {
-		c.JSON(http.StatusOK, models.WaitlistResponse{
-			Success: true,
-			Message: "You are already on the waitlist!",
-		})
-		return
-	}
-
-	if status.Code(err) != codes.NotFound {
-		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
-			Success: false,
-			Message: "Database error",
-		})
-		return
-	}
-
 	referralCode := GenerateReferralCode()
+	docRef := services.FirestoreClient.Collection("waitlist").Doc(req.Email)
 
-	_, err = docRef.Set(ctx, map[string]interface{}{
+	_, err := docRef.Create(ctx, map[string]interface{}{
 		"email":         req.Email,
 		"referral_code": referralCode,
 		"referred_by":   req.ReferralCode,
 		"created_at":    time.Now(),
 	})
+
 	if err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			c.JSON(http.StatusOK, models.WaitlistResponse{
+				Success: true,
+				Message: "You are already on the waitlist!",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
 			Success: false,
-			Message: "Failed to join waitlist",
+			Message: "Database error",
 		})
 		return
 	}
