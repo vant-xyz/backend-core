@@ -12,9 +12,9 @@ import (
 var DB *sql.DB
 
 func InitDB() {
-	connStr := os.Getenv("SUPABASE_DATABASE_CONNECTION_STRING")
+	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		log.Fatal("SUPABASE_DATABASE_CONNECTION_STRING not set")
+		log.Fatal("DATABASE_URL not set")
 	}
 
 	var err error
