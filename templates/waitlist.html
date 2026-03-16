@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Ubuntu', Helvetica, Arial, sans-serif;
+            background-color: #000000;
+            margin: 0;
+            padding: 0;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #0a0a0a;
+            border: 1px solid #1a1a1a;
+        }
+        .header {
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .logo-box {
+            width: 40px;
+            height: 40px;
+            background-color: #FF0000;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+        .brand-name {
+            font-size: 48px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: #ffffff;
+            display: inline-block;
+            vertical-align: middle;
+            text-transform: uppercase;
+        }
+        .content {
+            padding: 0 40px 40px 40px;
+            text-align: center;
+        }
+        h1 {
+            color: #FF0000;
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+        p {
+            color: #cccccc;
+            line-height: 1.6;
+            font-size: 16px;
+        }
+        .content h1{
+            text-align: left;
+        }
+        .content p{
+            text-align: left;
+        }
+        .ref-box {
+            background-color: #1a1a1a;
+            border: 1px dashed #FF0000;
+            padding: 20px;
+            margin: 30px 0;
+            border-radius: 4px;
+        }
+        .ref-code {
+            font-size: 24px;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 4px;
+            display: block;
+            margin-top: 10px;
+        }
+        .footer {
+            padding: 20px;
+            background-color: #050505;
+            text-align: center;
+            font-size: 12px;
+            color: #666666;
+            border-top: 1px solid #1a1a1a;
+        }
+        .social-link {
+            color: #FF0000;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <span class="brand-name">VANT</span>
+        </div>
+        <div class="content">
+            <h1>You're on the list.</h1>
+            <p>Thanks for joining the Vant waitlist. You’re officially in line to experience the fastest prediction terminal built for the Nigerian market.</p>
+            <p>We’ll message you as soon as we’re ready to onboard the next batch of traders.</p>
+            
+            <div class="ref-box">
+                <span style="color: #FF0000; text-transform: uppercase; font-size: 12px; font-weight: 700;">Your Referral Code</span>
+                <span class="ref-code">{{.ReferralCode}}</span>
+            </div>
+            
+            <p style="font-size: 14px;">Invite your friends to move up the queue. The more people you bring to Vant, the earlier you get access.</p>
+        </div>
+        <div class="footer">
+            <span>
+                An automated mail, do not reply
+                <br>
+                You can send a mail <a href="mailto:me@davidnzube.xyz" class="social-link">here</a>
+            </span>
+            <p>&copy; 2026 Vant. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
