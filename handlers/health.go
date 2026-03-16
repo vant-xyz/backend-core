@@ -1,20 +1,14 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 
-	"cloud.google.com/go/firestore"
 	"github.com/gin-gonic/gin"
-	"github.com/vant-xyz/backend-code/services"
+	"github.com/vant-xyz/backend-code/db"
 )
 
 func HealthCheck(c *gin.Context) {
-	ctx := context.Background()
-
-	err := services.FirestoreClient.RunTransaction(ctx, func(ctx context.Background(), tx *firestore.Transaction) error {
-		return nil
-	})
+	err := db.HealthCheck(c.Request.Context())
 
 	status := "up"
 	if err != nil {

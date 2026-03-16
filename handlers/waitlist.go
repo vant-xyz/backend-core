@@ -1,17 +1,14 @@
 package handlers
 
 import (
-	"context"
 	"crypto/rand"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 	"github.com/vant-xyz/backend-code/services"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func GenerateReferralCode() string {
@@ -30,28 +27,21 @@ func JoinWaitlist(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
 	referralCode := GenerateReferralCode()
-	docRef := services.FirestoreClient.Collection("waitlist").Doc(req.Email)
-
-	_, err := docRef.Create(ctx, map[string]interface{}{
-		"email":         req.Email,
-		"referral_code": referralCode,
-		"referred_by":   req.ReferralCode,
-		"created_at":    time.Now(),
-	})
+	alreadyExists, err := db.SaveWaitlistEntry(c.Request.Context(), req.Email, referralCode, req.ReferralCode)
 
 	if err != nil {
-		if status.Code(err) == codes.AlreadyExists {
-			c.JSON(http.StatusOK, models.WaitlistResponse{
-				Success: true,
-				Message: "You are already on the waitlist!",
-			})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, models.WaitlistResponse{
 			Success: false,
 			Message: "Database error",
+		})
+		return
+	}
+
+	if alreadyExists {
+		c.JSON(http.StatusOK, models.WaitlistResponse{
+			Success: true,
+			Message: "You are already on the waitlist!",
 		})
 		return
 	}

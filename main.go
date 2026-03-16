@@ -7,20 +7,20 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/handlers"
-	"github.com/vant-xyz/backend-code/services"
 )
 
 func main() {
 	_ = godotenv.Load()
 
-	services.InitDB()
+	db.Init("vant-a2479", "serviceAccount.json")
 
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"POST", "OPTIONS"},
+		AllowMethods:     []string{"POST", "OPTIONS", "GET"},
 		AllowHeaders:     []string{"Origin", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
