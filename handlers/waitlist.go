@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -12,9 +13,9 @@ import (
 )
 
 func GenerateReferralCode() string {
-	b := make([]byte, 3)
-	rand.Read(b)
-	return fmt.Sprintf("%X", b)
+	max := big.NewInt(1000000)
+	n, _ := rand.Int(rand.Reader, max)
+	return fmt.Sprintf("%06d", n)
 }
 
 func JoinWaitlist(c *gin.Context) {
