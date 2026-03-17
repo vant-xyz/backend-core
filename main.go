@@ -9,12 +9,15 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/handlers"
+	"github.com/vant-xyz/backend-code/services"
 )
 
 func main() {
 	_ = godotenv.Load()
 
 	db.Init("vant-a2479", "serviceAccount.json")
+	
+	services.StartPricePoller()
 
 	r := gin.Default()
 
@@ -26,21 +29,29 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Public routes
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
+	r.GET("/prices", handlers.GetPrices)
 	
-	// Auth routes
 	r.POST("/auth/exists", handlers.CheckEmailExists)
 	r.POST("/auth/username/exists", handlers.CheckUsername)
-	r.POST("/auth", handlers.Auth) // Unified Login/Signup
+	r.POST("/auth", handlers.Auth)
 
-	// Protected routes
+	r.GET("/ws", func(c *gin.Context) {
+		services.HandlePriceWS(c.Writer, c.Request)
+	})
+
 	auth := r.Group("/")
 	auth.Use(handlers.AuthMiddleware())
 	{
+		auth.GET("/user", handlers.GetUserProfile)
+		auth.PUT("/user", handlers.UpdateUserProfile)
+		auth.POST("/user/profile-image", handlers.UploadProfileImage)
 		auth.POST("/auth/username", handlers.UpdateUsername)
 		auth.POST("/auth/logout", handlers.Logout)
+		
+		auth.GET("/balance", handlers.GetUserBalance)
+		auth.POST("/demo/fund", handlers.FundDemoAccount)
 	}
 
 	port := os.Getenv("PORT")

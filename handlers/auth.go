@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -70,7 +71,8 @@ func Auth(c *gin.Context) {
 			}
 			user, err = db.CreateUser(c.Request.Context(), req.Email, hashedPassword)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile"})
+				log.Printf("Signup Error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile: " + err.Error()})
 				return
 			}
 			token, err := services.GenerateJWT(user.Email)

@@ -5,6 +5,7 @@ import "time"
 type User struct {
 	Email           string    `json:"email" firestore:"email"`
 	Name            string    `json:"name,omitempty" firestore:"name"`
+	FullName        string    `json:"full_name,omitempty" firestore:"full_name"`
 	Username        string    `json:"username" firestore:"username"`
 	Password        string    `json:"-" firestore:"password"` // Hashed
 	VantID          string    `json:"vant_id" firestore:"vant_id"`
