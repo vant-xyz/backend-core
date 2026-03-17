@@ -32,6 +32,7 @@ func main() {
 	
 	// Auth routes
 	r.POST("/auth/exists", handlers.CheckEmailExists)
+	r.POST("/auth/username/exists", handlers.CheckUsername)
 	r.POST("/auth", handlers.Auth) // Unified Login/Signup
 
 	// Protected routes
@@ -39,7 +40,7 @@ func main() {
 	auth.Use(handlers.AuthMiddleware())
 	{
 		auth.POST("/auth/username", handlers.UpdateUsername)
-		auth.POST("/logout", handlers.Logout)
+		auth.POST("/auth/logout", handlers.Logout)
 	}
 
 	port := os.Getenv("PORT")

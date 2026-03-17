@@ -43,7 +43,19 @@ func GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	return &user, nil
 }
 
-func CreateUser(ctx context.Context, email, hashedEmail string) (*models.User, error) {
+func CheckUsernameExists(ctx context.Context, username string) (bool, error) {
+	iter := Client.Collection("users").Where("username", "==", username).Limit(1).Documents(ctx)
+	_, err := iter.Next()
+	if err == iterator.Done {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func CreateUser(ctx context.Context, email, hashedPassword string) (*models.User, error) {
 	balanceID := fmt.Sprintf("BAL_%s", utils.RandomAlphanumeric(10))
 	vantID := fmt.Sprintf("VANTID_%s", utils.RandomNumbers(8))
 	username := fmt.Sprintf("@user%s", utils.RandomAlphanumeric(6))
@@ -51,7 +63,7 @@ func CreateUser(ctx context.Context, email, hashedEmail string) (*models.User, e
 	user := models.User{
 		Email:           email,
 		Username:        username,
-		Password:        hashedEmail,
+		Password:        hashedPassword,
 		VantID:          vantID,
 		BalanceID:       balanceID,
 		Socials:         []string{},
@@ -78,14 +90,12 @@ func CreateUser(ctx context.Context, email, hashedEmail string) (*models.User, e
 }
 
 func UpdateUsername(ctx context.Context, email, username string) error {
-	// Check if username exists
-	iter := Client.Collection("users").Where("username", "==", username).Limit(1).Documents(ctx)
-	_, err := iter.Next()
-	if err != iterator.Done {
-		if err == nil {
-			return fmt.Errorf("username already taken")
-		}
+	exists, err := CheckUsernameExists(ctx, username)
+	if err != nil {
 		return err
+	}
+	if exists {
+		return fmt.Errorf("username already taken")
 	}
 
 	_, err = Client.Collection("users").Doc(email).Update(ctx, []firestore.Update{
