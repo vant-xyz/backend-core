@@ -12,10 +12,20 @@ import (
 
 func GetEncryptionKey() []byte {
 	key := os.Getenv("WALLET_ENCRYPTION_KEY")
-	if len(key) != 32 {
+	if key == "" {
 		return []byte("vant-default-32-byte-secret-key!!")
 	}
-	return []byte(key)
+	
+	keyBytes := []byte(key)
+	if len(keyBytes) > 32 {
+		return keyBytes[:32]
+	}
+	if len(keyBytes) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, keyBytes)
+		return padded
+	}
+	return keyBytes
 }
 
 func Encrypt(text string) (string, error) {
