@@ -2,11 +2,14 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"github.com/vant-xyz/backend-code/models"
+	"github.com/vant-xyz/backend-code/utils"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -18,7 +21,7 @@ var Client *firestore.Client
 func Init(projectID string, credentialsPath string) {
 	ctx := context.Background()
 	sa := option.WithServiceAccountFile(credentialsPath)
-	
+
 	client, err := firestore.NewClient(ctx, projectID, sa)
 	if err != nil {
 		log.Fatalf("Failed to create firestore client: %v", err)
@@ -27,9 +30,74 @@ func Init(projectID string, credentialsPath string) {
 	Client = client
 }
 
+// User related operations
+func GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	doc, err := Client.Collection("users").Doc(email).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var user models.User
+	if err := doc.DataTo(&user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func CreateUser(ctx context.Context, email, hashedEmail string) (*models.User, error) {
+	balanceID := fmt.Sprintf("BAL_%s", utils.RandomAlphanumeric(10))
+	vantID := fmt.Sprintf("VANTID_%s", utils.RandomNumbers(8))
+	username := fmt.Sprintf("@user%s", utils.RandomAlphanumeric(6))
+
+	user := models.User{
+		Email:           email,
+		Username:        username,
+		Password:        hashedEmail,
+		VantID:          vantID,
+		BalanceID:       balanceID,
+		Socials:         []string{},
+		ProfileImageURL: "",
+		CreatedAt:       time.Now(),
+	}
+
+	balance := models.Balance{
+		ID:    balanceID,
+		Email: email,
+	}
+
+	_, err := Client.Collection("users").Doc(email).Set(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = Client.Collection("balances").Doc(balanceID).Set(ctx, balance)
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+func UpdateUsername(ctx context.Context, email, username string) error {
+	// Check if username exists
+	iter := Client.Collection("users").Where("username", "==", username).Limit(1).Documents(ctx)
+	_, err := iter.Next()
+	if err != iterator.Done {
+		if err == nil {
+			return fmt.Errorf("username already taken")
+		}
+		return err
+	}
+
+	_, err = Client.Collection("users").Doc(email).Update(ctx, []firestore.Update{
+		{Path: "username", Value: username},
+	})
+	return err
+}
+
+// Waitlist related operations
 func SaveWaitlistEntry(ctx context.Context, email, referralCode, referredByCode string) (bool, string, error) {
 	docRef := Client.Collection("waitlist").Doc(email)
-	
+
 	doc, err := docRef.Get(ctx)
 	if err == nil {
 		var data map[string]interface{}
@@ -63,7 +131,6 @@ func TrackReferral(referredByCode, newUserEmail string) {
 		return
 	}
 
-	// Ensure code is uppercase to match our generated format
 	searchCode := strings.ToUpper(referredByCode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

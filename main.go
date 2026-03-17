@@ -20,14 +20,27 @@ func main() {
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"POST", "OPTIONS", "GET"},
-		AllowHeaders:     []string{"Origin", "Content-Type"},
+		AllowMethods:     []string{"POST", "OPTIONS", "GET", "PUT"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
 
+	// Public routes
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
+	
+	// Auth routes
+	r.POST("/auth/exists", handlers.CheckEmailExists)
+	r.POST("/auth", handlers.Auth) // Unified Login/Signup
+
+	// Protected routes
+	auth := r.Group("/")
+	auth.Use(handlers.AuthMiddleware())
+	{
+		auth.POST("/auth/username", handlers.UpdateUsername)
+		auth.POST("/logout", handlers.Logout)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
