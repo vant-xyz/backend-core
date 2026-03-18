@@ -242,6 +242,8 @@ func UpdateBalance(ctx context.Context, email string, field string, amount float
 	if err != nil {
 		return err
 	}
+	
+	// Direct update using the discovered document reference
 	_, err = doc.Ref.Update(ctx, []firestore.Update{
 		{Path: field, Value: firestore.Increment(amount)},
 	})

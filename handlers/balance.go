@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -66,7 +67,8 @@ func SyncBalance(c *gin.Context) {
 }
 
 func SellAsset(c *gin.Context) {
-	email, _ := c.Get("email")
+	emailStr, _ := c.Get("email")
+	email := emailStr.(string)
 
 	var req struct {
 		Asset  string  `json:"asset" binding:"required"`
@@ -78,7 +80,7 @@ func SellAsset(c *gin.Context) {
 		return
 	}
 
-	balance, err := db.GetBalanceByEmail(c.Request.Context(), email.(string))
+	balance, err := db.GetBalanceByEmail(c.Request.Context(), email)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Balance not found"})
 		return
@@ -101,70 +103,71 @@ func SellAsset(c *gin.Context) {
 
 	receiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
 
-	err = db.UpdateBalance(c.Request.Context(), email.(string), req.Asset, -req.Amount)
+	err = db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to deduct asset"})
-		return
-	}
-
-	nairaField := "naira"
-	if req.Nature == "demo" {
-		nairaField = "demo_naira"
-	}
-
-	err = db.UpdateBalance(c.Request.Context(), email.(string), nairaField, receiveNaira)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to add naira"})
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to initiate deduction"})
 		return
 	}
 
 	go func() {
-		wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+		bgCtx := context.Background()
+		wallet, err := db.GetWalletByEmail(bgCtx, email)
 		if err != nil {
-			log.Printf("SellAsset (background): could not get wallet for %s", email)
+			db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 			return
 		}
 
 		var txHash string
-		if req.Asset == "demo_sol" && req.Nature == "demo" {
+		if (req.Asset == "demo_sol" || req.Asset == "sol") {
 			decryptedPrivKey, err := services.Decrypt(wallet.SolPrivateKey)
 			if err != nil {
-				log.Printf("SellAsset (background) Error (Decrypt): %v", err)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
 			
 			vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
 			txHash, err = services.TransferSol(decryptedPrivKey, vaultPubKey, req.Amount)
 			if err != nil {
-				log.Printf("SellAsset (background) Error (Transfer): %v", err)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
 		}
 
+		nairaField := "naira"
+		if req.Nature == "demo" {
+			nairaField = "demo_naira"
+		}
+
+		err = db.UpdateBalance(bgCtx, email, nairaField, receiveNaira)
+		if err != nil {
+			log.Printf("Fatal: Failed to credit naira after successful on-chain move for %s", email)
+		}
+
 		transaction := models.Transaction{
 			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
-			UserEmail: email.(string),
-			Amount:    req.Amount,
-			Currency:  req.Asset,
+			UserEmail: email,
+			Amount:    receiveNaira,
+			Currency:  "NGN",
 			Nature:    req.Nature,
 			Type:      "sell",
 			Status:    "completed",
 			TxHash:    txHash,
 			CreatedAt: time.Now(),
 		}
-		db.SaveTransaction(c.Request.Context(), transaction)
+		db.SaveTransaction(bgCtx, transaction)
 
-		services.PriceHub.BroadcastToUser(email.(string), "BALANCE_UPDATE")
+		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"message":        "Sell initiated successfully",
+		"success": true,
+		"message": "Sell initiated successfully",
 	})
 }
 
 func FundDemoAccount(c *gin.Context) {
-	email, _ := c.Get("email")
+	emailStr, _ := c.Get("email")
+	email := emailStr.(string)
 
 	var req struct {
 		AmountNaira float64 `json:"amount" binding:"required"`
@@ -179,7 +182,7 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	balance, err := db.GetBalanceByEmail(c.Request.Context(), email.(string))
+	balance, err := db.GetBalanceByEmail(c.Request.Context(), email)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Balance not found"})
 		return
@@ -191,7 +194,7 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found"})
 		return
@@ -209,15 +212,14 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	err = db.UpdateBalance(c.Request.Context(), email.(string), "demo_sol", amountSol)
+	err = db.UpdateBalance(c.Request.Context(), email, "demo_sol", amountSol)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Balance update error"})
-		return
+		log.Printf("Error updating balance after faucet: %v", err)
 	}
 
 	transaction := models.Transaction{
 		ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
-		UserEmail: email.(string),
+		UserEmail: email,
 		Amount:    req.AmountNaira,
 		Currency:  "NGN",
 		Nature:    "demo",
@@ -226,7 +228,11 @@ func FundDemoAccount(c *gin.Context) {
 		TxHash:    sig,
 		CreatedAt: time.Now(),
 	}
-	db.SaveTransaction(c.Request.Context(), transaction)
+	
+	err = db.SaveTransaction(c.Request.Context(), transaction)
+	if err != nil {
+		log.Printf("Error saving faucet transaction: %v", err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
