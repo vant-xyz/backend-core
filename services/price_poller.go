@@ -9,7 +9,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/gin-gonic/gin"
 )
+
+type Client struct {
+	conn  *websocket.Conn
+	email string
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -45,19 +51,19 @@ type PriceData struct {
 }
 
 type Hub struct {
-	clients    map[*websocket.Conn]bool
+	clients    map[*Client]bool
 	broadcast  chan PriceData
-	register   chan *websocket.Conn
-	unregister chan *websocket.Conn
+	register   chan *Client
+	unregister chan *Client
 	mu         sync.Mutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*websocket.Conn]bool),
+		clients:    make(map[*Client]bool),
 		broadcast:  make(chan PriceData),
-		register:   make(chan *websocket.Conn),
-		unregister: make(chan *websocket.Conn),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
 	}
 }
 
@@ -72,20 +78,30 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
-				client.Close()
+				client.conn.Close()
 			}
 			h.mu.Unlock()
 		case priceData := <-h.broadcast:
 			h.mu.Lock()
 			for client := range h.clients {
-				err := client.WriteJSON(priceData)
+				err := client.conn.WriteJSON(priceData)
 				if err != nil {
 					log.Printf("error: %v", err)
-					client.Close()
+					client.conn.Close()
 					delete(h.clients, client)
 				}
 			}
 			h.mu.Unlock()
+		}
+	}
+}
+
+func (h *Hub) BroadcastToUser(email, messageType string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if client.email == email {
+			client.conn.WriteJSON(gin.H{"type": messageType})
 		}
 	}
 }
@@ -163,11 +179,12 @@ func fetchPrice(symbol string) (string, error) {
 	return result.Data.Amount, nil
 }
 
-func HandlePriceWS(w http.ResponseWriter, r *http.Request) {
+func HandlePriceWS(w http.ResponseWriter, r *http.Request, email string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return
 	}
-	PriceHub.register <- conn
+	client := &Client{conn: conn, email: email}
+	PriceHub.register <- client
 }

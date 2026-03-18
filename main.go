@@ -32,16 +32,13 @@ func main() {
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
 	r.GET("/prices", handlers.GetPrices)
-	r.GET("/prices/vant", handlers.GetVantPrices)
-	r.GET("/prices/vant/:asset", handlers.GetAssetPrice)
+	
+	r.GET("/prices/vant", handlers.GetVantPrices) // Specific route first
+	r.GET("/prices/vant/:asset", handlers.GetAssetPrice) // Then generic route
 	
 	r.POST("/auth/exists", handlers.CheckEmailExists)
 	r.POST("/auth/username/exists", handlers.CheckUsername)
 	r.POST("/auth", handlers.Auth)
-
-	r.GET("/ws", func(c *gin.Context) {
-		services.HandlePriceWS(c.Writer, c.Request)
-	})
 
 	auth := r.Group("/")
 	auth.Use(handlers.AuthMiddleware())
@@ -56,6 +53,11 @@ func main() {
 		auth.GET("/balance/sync", handlers.SyncBalance)
 		auth.POST("/balance/sell", handlers.SellAsset)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
+
+		auth.GET("/ws", func(c *gin.Context) {
+			email, _ := c.Get("email")
+			services.HandlePriceWS(c.Writer, c.Request, email.(string))
+		})
 	}
 
 	port := os.Getenv("PORT")

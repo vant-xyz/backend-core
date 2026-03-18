@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -99,33 +100,6 @@ func SellAsset(c *gin.Context) {
 	}
 
 	receiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
-	
-	wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found for user"})
-		return
-	}
-
-	var txHash string
-	if req.Asset == "demo_sol" && req.Nature == "demo" {
-		decryptedPrivKey, err := services.Decrypt(wallet.SolPrivateKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to decrypt private key"})
-			return
-		}
-		
-		vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
-		if vaultPubKey == "" {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "VANT_SOLANA_VAULT_PUBLIC_KEY not set"})
-			return
-		}
-
-		txHash, err = services.TransferSol(decryptedPrivKey, vaultPubKey, req.Amount)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to transfer SOL on-chain: " + err.Error()})
-			return
-		}
-	}
 
 	err = db.UpdateBalance(c.Request.Context(), email.(string), req.Asset, -req.Amount)
 	if err != nil {
@@ -144,24 +118,48 @@ func SellAsset(c *gin.Context) {
 		return
 	}
 
-	transaction := models.Transaction{
-		ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
-		UserEmail: email.(string),
-		Amount:    req.Amount,
-		Currency:  req.Asset,
-		Nature:    req.Nature,
-		Type:      "sell",
-		Status:    "completed",
-		TxHash:    txHash,
-		CreatedAt: time.Now(),
-	}
-	db.SaveTransaction(c.Request.Context(), transaction)
+	go func() {
+		wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+		if err != nil {
+			log.Printf("SellAsset (background): could not get wallet for %s", email)
+			return
+		}
+
+		var txHash string
+		if req.Asset == "demo_sol" && req.Nature == "demo" {
+			decryptedPrivKey, err := services.Decrypt(wallet.SolPrivateKey)
+			if err != nil {
+				log.Printf("SellAsset (background) Error (Decrypt): %v", err)
+				return
+			}
+			
+			vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
+			txHash, err = services.TransferSol(decryptedPrivKey, vaultPubKey, req.Amount)
+			if err != nil {
+				log.Printf("SellAsset (background) Error (Transfer): %v", err)
+				return
+			}
+		}
+
+		transaction := models.Transaction{
+			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
+			UserEmail: email.(string),
+			Amount:    req.Amount,
+			Currency:  req.Asset,
+			Nature:    req.Nature,
+			Type:      "sell",
+			Status:    "completed",
+			TxHash:    txHash,
+			CreatedAt: time.Now(),
+		}
+		db.SaveTransaction(c.Request.Context(), transaction)
+
+		services.PriceHub.BroadcastToUser(email.(string), "BALANCE_UPDATE")
+	}()
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":        true,
-		"message":        fmt.Sprintf("Sold %f %s for ₦%.2f", req.Amount, req.Asset, receiveNaira),
-		"receive_amount": receiveNaira,
-		"tx_hash":        txHash,
+		"message":        "Sell initiated successfully",
 	})
 }
 

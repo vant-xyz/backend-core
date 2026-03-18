@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/programs/system"
 	computebudget "github.com/gagliardetto/solana-go/programs/compute-budget"
+	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
 	confirm "github.com/gagliardetto/solana-go/rpc/sendAndConfirmTransaction"
 	"github.com/gagliardetto/solana-go/rpc/ws"
@@ -45,7 +45,13 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 
 	senderWallet, err := solana.WalletFromPrivateKeyBase58(senderPrivateKey)
 	if err != nil {
-		senderWallet = &solana.Wallet{PrivateKey: solana.PrivateKey(solana.PrivateKey(senderPrivateKey))}
+		return "", fmt.Errorf("failed to create sender wallet from private key: %v", err)
+	}
+
+	feePayerSecret := os.Getenv("VANT_FEE_PAYER_SOLANA")
+	feePayerWallet, err := solana.WalletFromPrivateKeyBase58(feePayerSecret)
+	if err != nil {
+		return "", fmt.Errorf("failed to create fee payer wallet: %v", err)
 	}
 
 	dest, err := solana.PublicKeyFromBase58(recipientPublicKey)
@@ -70,7 +76,7 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 			).Build(),
 		},
 		recent.Value.Blockhash,
-		solana.TransactionPayer(senderWallet.PublicKey()),
+		solana.TransactionPayer(feePayerWallet.PublicKey()),
 	)
 	if err != nil {
 		return "", err
@@ -79,6 +85,9 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
 		if key.Equals(senderWallet.PublicKey()) {
 			return &senderWallet.PrivateKey
+		}
+		if key.Equals(feePayerWallet.PublicKey()) {
+			return &feePayerWallet.PrivateKey
 		}
 		return nil
 	})
