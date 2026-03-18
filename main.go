@@ -32,6 +32,8 @@ func main() {
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
 	r.GET("/prices", handlers.GetPrices)
+	r.GET("/prices/vant", handlers.GetVantPrices)
+	r.GET("/prices/vant/:asset", handlers.GetAssetPrice)
 	
 	r.POST("/auth/exists", handlers.CheckEmailExists)
 	r.POST("/auth/username/exists", handlers.CheckUsername)
@@ -51,6 +53,8 @@ func main() {
 		auth.POST("/auth/logout", handlers.Logout)
 		
 		auth.GET("/balance", handlers.GetUserBalance)
+		auth.GET("/balance/sync", handlers.SyncBalance)
+		auth.POST("/balance/sell", handlers.SellAsset)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
 	}
 

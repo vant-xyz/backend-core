@@ -237,12 +237,25 @@ func SaveTransaction(ctx context.Context, tx models.Transaction) error {
 }
 
 func UpdateBalance(ctx context.Context, email string, field string, amount float64) error {
-	doc, err := Client.Collection("balances").Where("email", "==", email).Limit(1).Documents(ctx).Next()
+	iter := Client.Collection("balances").Where("email", "==", email).Limit(1).Documents(ctx)
+	doc, err := iter.Next()
 	if err != nil {
 		return err
 	}
 	_, err = doc.Ref.Update(ctx, []firestore.Update{
 		{Path: field, Value: firestore.Increment(amount)},
+	})
+	return err
+}
+
+func SetBalance(ctx context.Context, email string, field string, amount float64) error {
+	iter := Client.Collection("balances").Where("email", "==", email).Limit(1).Documents(ctx)
+	doc, err := iter.Next()
+	if err != nil {
+		return err
+	}
+	_, err = doc.Ref.Update(ctx, []firestore.Update{
+		{Path: field, Value: amount},
 	})
 	return err
 }

@@ -106,21 +106,22 @@ func StartPricePoller() {
 		for {
 			for _, symbol := range symbols {
 				price, err := fetchPrice(symbol)
-				if err == nil {
-					data := PriceData{
-						Symbol: symbol,
-						Price:  price,
-						Time:   time.Now().Unix(),
-					}
-					
-					// Update Cache
-					priceMu.Lock()
-					latestPrices[symbol] = data
-					priceMu.Unlock()
-
-					// Broadcast to WS
-					PriceHub.broadcast <- data
+				if err != nil {
+					log.Printf("Price Poller Warning: Could not fetch %s: %v", symbol, err)
+					continue
 				}
+				
+				data := PriceData{
+					Symbol: symbol,
+					Price:  price,
+					Time:   time.Now().Unix(),
+				}
+				
+				priceMu.Lock()
+				latestPrices[symbol] = data
+				priceMu.Unlock()
+
+				PriceHub.broadcast <- data
 			}
 			time.Sleep(5 * time.Second)
 		}
@@ -131,7 +132,6 @@ func GetLatestPrices() map[string]PriceData {
 	priceMu.RLock()
 	defer priceMu.RUnlock()
 	
-	// Return a copy to avoid race conditions
 	copyMap := make(map[string]PriceData)
 	for k, v := range latestPrices {
 		copyMap[k] = v
@@ -145,6 +145,10 @@ func fetchPrice(symbol string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", http.ErrHandlerTimeout
+	}
 
 	var result struct {
 		Data struct {

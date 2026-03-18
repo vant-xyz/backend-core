@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,12 +23,145 @@ func GetUserBalance(c *gin.Context) {
 	}
 
 	realNaira, demoNaira := services.ResolveNairaBalances(balance)
+	balance.TotalNaira = realNaira
+	balance.TotalDemoNaira = demoNaira
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":    true,
-		"balance":    balance,
-		"naira":      realNaira,
-		"demo_naira": demoNaira,
+		"success": true,
+		"balance": balance,
+	})
+}
+
+func SyncBalance(c *gin.Context) {
+	email, _ := c.Get("email")
+
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found"})
+		return
+	}
+
+	onChainSol, err := services.GetSolBalance(wallet.SolPublicKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch on-chain balance"})
+		return
+	}
+
+	err = db.SetBalance(c.Request.Context(), email.(string), "demo_sol", onChainSol)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update database"})
+		return
+	}
+
+	balance, _ := db.GetBalanceByEmail(c.Request.Context(), email.(string))
+	realNaira, demoNaira := services.ResolveNairaBalances(balance)
+	balance.TotalNaira = realNaira
+	balance.TotalDemoNaira = demoNaira
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"balance": balance,
+	})
+}
+
+func SellAsset(c *gin.Context) {
+	email, _ := c.Get("email")
+
+	var req struct {
+		Asset  string  `json:"asset" binding:"required"`
+		Amount float64 `json:"amount" binding:"required"`
+		Nature string  `json:"nature" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
+		return
+	}
+
+	balance, err := db.GetBalanceByEmail(c.Request.Context(), email.(string))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Balance not found"})
+		return
+	}
+
+	currentAssetBalance := 0.0
+	switch req.Asset {
+	case "sol": currentAssetBalance = balance.Sol
+	case "eth_base": currentAssetBalance = balance.ETHBase
+	case "usdc_sol": currentAssetBalance = balance.USDCSol
+	case "usdc_base": currentAssetBalance = balance.USDCBase
+	case "demo_sol": currentAssetBalance = balance.DemoSol
+	case "demo_usdc_sol": currentAssetBalance = balance.DemoUSDCSol
+	}
+
+	if req.Amount > currentAssetBalance {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Insufficient balance"})
+		return
+	}
+
+	receiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
+	
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found for user"})
+		return
+	}
+
+	var txHash string
+	if req.Asset == "demo_sol" && req.Nature == "demo" {
+		decryptedPrivKey, err := services.Decrypt(wallet.SolPrivateKey)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to decrypt private key"})
+			return
+		}
+		
+		vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
+		if vaultPubKey == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "VANT_SOLANA_VAULT_PUBLIC_KEY not set"})
+			return
+		}
+
+		txHash, err = services.TransferSol(decryptedPrivKey, vaultPubKey, req.Amount)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to transfer SOL on-chain: " + err.Error()})
+			return
+		}
+	}
+
+	err = db.UpdateBalance(c.Request.Context(), email.(string), req.Asset, -req.Amount)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to deduct asset"})
+		return
+	}
+
+	nairaField := "naira"
+	if req.Nature == "demo" {
+		nairaField = "demo_naira"
+	}
+
+	err = db.UpdateBalance(c.Request.Context(), email.(string), nairaField, receiveNaira)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to add naira"})
+		return
+	}
+
+	transaction := models.Transaction{
+		ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
+		UserEmail: email.(string),
+		Amount:    req.Amount,
+		Currency:  req.Asset,
+		Nature:    req.Nature,
+		Type:      "sell",
+		Status:    "completed",
+		TxHash:    txHash,
+		CreatedAt: time.Now(),
+	}
+	db.SaveTransaction(c.Request.Context(), transaction)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"message":        fmt.Sprintf("Sold %f %s for ₦%.2f", req.Amount, req.Asset, receiveNaira),
+		"receive_amount": receiveNaira,
+		"tx_hash":        txHash,
 	})
 }
 

@@ -63,7 +63,6 @@ func Auth(c *gin.Context) {
 	user, err := db.GetUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			// SIGNUP
 			hashedPassword, err := services.HashPassword(req.Password)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to secure password"})
@@ -92,7 +91,6 @@ func Auth(c *gin.Context) {
 		return
 	}
 
-	// LOGIN
 	if !services.CheckPasswordHash(req.Password, user.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid email or password"})
 		return
@@ -131,7 +129,6 @@ func UpdateUsername(c *gin.Context) {
 		return
 	}
 
-	// Fetch the updated user and return to frontend
 	updatedUser, _ := db.GetUserByEmail(c.Request.Context(), req.Email)
 
 	c.JSON(http.StatusOK, gin.H{

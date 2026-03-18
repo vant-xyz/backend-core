@@ -3,14 +3,13 @@ package test
 import (
 	"crypto/rand"
 	"fmt"
-	"math/big"
 	"testing"
 )
 
 func GenerateReferralCode() string {
-	max := big.NewInt(1000000)
-	n, _ := rand.Int(rand.Reader, max)
-	return fmt.Sprintf("%06d", n)
+	b := make([]byte, 3)
+	rand.Read(b)
+	return fmt.Sprintf("%X", b)
 }
 
 func TestGenerateReferralCodeUnique(t *testing.T) {
@@ -33,13 +32,13 @@ func TestGenerateReferralCodeLength(t *testing.T) {
 	}
 }
 
-func TestReferralCodeIsNumeric(t *testing.T) {
+func TestReferralCodeIsHex(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		code := GenerateReferralCode()
 		for _, char := range code {
-			isNumeric := (char >= '0' && char <= '9')
-			if !isNumeric {
-				t.Errorf("Expected numeric character, got %c in code %s", char, code)
+			isHex := (char >= '0' && char <= '9') || (char >= 'A' && char <= 'F')
+			if !isHex {
+				t.Errorf("Expected hex character, got %c in code %s", char, code)
 			}
 		}
 	}
