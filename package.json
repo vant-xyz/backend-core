@@ -1,0 +1,14 @@
+{
+  "name": "be",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/vant-xyz/backend-core.git",
+  "author": "DavidNzube101 <davidnzube2007@outlook.com>",
+  "license": "MIT",
+	"scripts": {
+		"build": "go build .",
+		"run": "go run .",
+		"test": "go test -v ./...",
+		"clean": "rm -rf backend-code"
+	}
+}

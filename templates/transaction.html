@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Ubuntu', sans-serif; background-color: #000000; margin: 0; padding: 0; color: #ffffff; }
+        .container { max-width: 600px; margin: 20px auto; background-color: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 8px; }
+        .header { padding: 30px; text-align: center; border-bottom: 1px solid #1a1a1a; }
+        .logo-box { width: 32px; height: 32px; background-color: #FF0000; display: inline-block; vertical-align: middle; }
+        .brand-name { font-size: 20px; font-weight: 700; letter-spacing: 2px; margin-left: 10px; text-transform: uppercase; }
+        .content { padding: 40px; }
+        .status-badge { color: #00FF00; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; margin-bottom: 10px; display: block; }
+        .nature-tag { background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; vertical-align: middle; text-transform: uppercase; margin-left: 5px; }
+        h1 { font-size: 24px; margin: 0 0 20px 0; }
+        .txn-card { background: linear-gradient(145deg, #161616, #0d0d0d); border: 1px solid #333; padding: 25px; border-radius: 12px; margin: 20px 0; }
+        .label { color: #888; font-size: 11px; text-transform: uppercase; margin-bottom: 5px; }
+        .value { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 15px; }
+        .detail-row { display: flex; justify-content: space-between; margin-top: 10px; border-top: 1px solid #222; padding-top: 10px; }
+        .btn { display: block; background-color: #FF0000; color: #ffffff; text-align: center; padding: 15px; text-decoration: none; font-weight: 700; border-radius: 6px; margin-top: 30px; }
+        .footer { padding: 20px; text-align: center; font-size: 11px; color: #444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo-box"></div>
+        </div>
+        <div class="content">
+            <span class="status-badge">● {{.Status}}</span>
+            <h1>{{.Type}} Successful <span class="nature-tag">{{.Nature}}</span></h1>
+            <p style="color: #888;">Your Vant account has been updated. The funds are ready for action.</p>
+            
+            <div class="txn-card">
+                <div class="label">Amount</div>
+                <div class="value">{{printf "%.2f" .Amount}} {{.Currency}}</div>
+                
+                <div class="detail-row">
+                    <span style="color: #666; font-size: 13px;">Transaction ID</span>
+                    <span style="color: #fff; font-size: 13px;">{{.ID}}</span>
+                </div>
+                {{if .TxHash}}
+                <div class="detail-row">
+                    <span style="color: #666; font-size: 13px;">On-Chain Hash</span>
+                    <span style="color: #fff; font-size: 13px;">{{.TxHash}}</span>
+                </div>
+                {{end}}
+            </div>
+
+            <a href="https://vant.davidnzube.xyz/app" class="btn">Launch Terminal</a>
+        </div>
+        <div class="footer">
+            <p>Sent to {{.UserEmail}} at {{.CreatedAt.Format "Jan 02, 2006 15:04:05"}}</p>
+            <p>&copy; 2026 Vant.</p>
+        </div>
+    </div>
+</body>
+</html>
