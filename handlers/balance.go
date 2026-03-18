@@ -155,7 +155,8 @@ func SellAsset(c *gin.Context) {
 			CreatedAt: time.Now(),
 		}
 		db.SaveTransaction(bgCtx, transaction)
-
+		
+		go services.SendTransactionEmail(email, transaction)
 		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
 	}()
 
@@ -233,6 +234,8 @@ func FundDemoAccount(c *gin.Context) {
 	if err != nil {
 		log.Printf("Error saving faucet transaction: %v", err)
 	}
+	
+	go services.SendTransactionEmail(email, transaction)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

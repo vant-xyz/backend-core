@@ -40,6 +40,10 @@ func main() {
 	r.POST("/auth/username/exists", handlers.CheckUsername)
 	r.POST("/auth", handlers.Auth)
 
+	// Internal routes for Indexer
+	r.GET("/internal/wallets", handlers.GetInternalWallets)
+	r.POST("/internal/deposit", handlers.HandleInternalDeposit)
+
 	auth := r.Group("/")
 	auth.Use(handlers.AuthMiddleware())
 	{
@@ -53,6 +57,7 @@ func main() {
 		auth.GET("/balance/sync", handlers.SyncBalance)
 		auth.POST("/balance/sell", handlers.SellAsset)
 		auth.GET("/transactions", handlers.GetTransactions)
+		auth.POST("/transactions/email", handlers.SendTransactionEmail)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
 
 		auth.GET("/ws", func(c *gin.Context) {

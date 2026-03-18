@@ -231,6 +231,26 @@ func GetWalletByEmail(ctx context.Context, email string) (*models.Wallet, error)
 	return &wallet, nil
 }
 
+func GetAllWallets(ctx context.Context) ([]models.Wallet, error) {
+	iter := Client.Collection("wallets").Documents(ctx)
+	var wallets []models.Wallet
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var wallet models.Wallet
+		if err := doc.DataTo(&wallet); err != nil {
+			continue
+		}
+		wallets = append(wallets, wallet)
+	}
+	return wallets, nil
+}
+
 func SaveTransaction(ctx context.Context, tx models.Transaction) error {
 	_, err := Client.Collection("transactions").Doc(tx.ID).Set(ctx, tx)
 	return err
