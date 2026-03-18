@@ -236,14 +236,36 @@ func SaveTransaction(ctx context.Context, tx models.Transaction) error {
 	return err
 }
 
+func GetTransactionsByEmail(ctx context.Context, email string) ([]models.Transaction, error) {
+	iter := Client.Collection("transactions").
+		Where("user_email", "==", email).
+		OrderBy("created_at", firestore.Desc).
+		Documents(ctx)
+	
+	var transactions []models.Transaction
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var tx models.Transaction
+		if err := doc.DataTo(&tx); err != nil {
+			continue
+		}
+		transactions = append(transactions, tx)
+	}
+	return transactions, nil
+}
+
 func UpdateBalance(ctx context.Context, email string, field string, amount float64) error {
 	iter := Client.Collection("balances").Where("email", "==", email).Limit(1).Documents(ctx)
 	doc, err := iter.Next()
 	if err != nil {
 		return err
 	}
-	
-	// Direct update using the discovered document reference
 	_, err = doc.Ref.Update(ctx, []firestore.Update{
 		{Path: field, Value: firestore.Increment(amount)},
 	})

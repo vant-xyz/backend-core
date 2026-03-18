@@ -52,6 +52,7 @@ func main() {
 		auth.GET("/balance", handlers.GetUserBalance)
 		auth.GET("/balance/sync", handlers.SyncBalance)
 		auth.POST("/balance/sell", handlers.SellAsset)
+		auth.GET("/transactions", handlers.GetTransactions)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
 
 		auth.GET("/ws", func(c *gin.Context) {
