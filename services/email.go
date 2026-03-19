@@ -60,11 +60,19 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 		return fmt.Errorf("failed to parse template: %v", err)
 	}
 
+	data := struct {
+		models.Transaction
+		UserEmail string
+	}{
+		Transaction: tx,
+		UserEmail:   toEmail,
+	}
+
 	var body bytes.Buffer
 	mimeHeaders := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 	body.Write([]byte(fmt.Sprintf("Subject: Your Vant Transaction: %s\n%s\n\n", tx.ID, mimeHeaders)))
 
-	err = tmpl.Execute(&body, tx)
+	err = tmpl.Execute(&body, data)
 	if err != nil {
 		return fmt.Errorf("failed to execute template: %v", err)
 	}
