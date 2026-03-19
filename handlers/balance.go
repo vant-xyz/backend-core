@@ -45,14 +45,40 @@ func SyncBalance(c *gin.Context) {
 
 	onChainSol, err := services.GetSolBalance(wallet.SolPublicKey)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch on-chain balance"})
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch on-chain SOL balance"})
 		return
 	}
 
 	err = db.SetBalance(c.Request.Context(), email.(string), "demo_sol", onChainSol)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update database"})
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update SOL balance"})
 		return
+	}
+
+	usdc, usdt, usdg, err := services.GetAllSPLBalances(wallet.SolPublicKey)
+	if err != nil {
+		log.Printf("Error fetching SPL balances: %v", err)
+	}
+
+	if usdc > 0 {
+		err = db.SetBalance(c.Request.Context(), email.(string), "demo_usdc_sol", usdc)
+		if err != nil {
+			log.Printf("Failed to update USDC balance: %v", err)
+		}
+	}
+
+	if usdt > 0 {
+		err = db.SetBalance(c.Request.Context(), email.(string), "usdt_sol", usdt)
+		if err != nil {
+			log.Printf("Failed to update USDT balance: %v", err)
+		}
+	}
+
+	if usdg > 0 {
+		err = db.SetBalance(c.Request.Context(), email.(string), "usdg_sol", usdg)
+		if err != nil {
+			log.Printf("Failed to update USDG balance: %v", err)
+		}
 	}
 
 	balance, _ := db.GetBalanceByEmail(c.Request.Context(), email.(string))

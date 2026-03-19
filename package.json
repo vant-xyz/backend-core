@@ -7,7 +7,8 @@
   "license": "MIT",
 	"scripts": {
 		"build": "go build .",
-		"run": "go run .",
+		"dev": "go run .",
+		"start": "GIN_MODE=release go run .",
 		"test": "go test -v ./...",
 		"clean": "rm -rf backend-code"
 	}

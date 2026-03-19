@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gagliardetto/solana-go"
@@ -30,6 +31,80 @@ func GetSolBalance(pubKey string) (float64, error) {
 	}
 
 	return float64(res.Value) / 1e9, nil
+}
+
+// GetSPLBalance fetches the balance of an SPL token for a given wallet
+func GetSPLBalance(walletPubKey, mintPubKey, rpcURL, tokenName string) (float64, error) {
+	client := rpc.New(rpcURL)
+
+	wallet, err := solana.PublicKeyFromBase58(walletPubKey)
+	if err != nil {
+		return 0, err
+	}
+
+	mint, err := solana.PublicKeyFromBase58(mintPubKey)
+	if err != nil {
+		return 0, err
+	}
+
+	ata, _, err := solana.FindAssociatedTokenAddress(wallet, mint)
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := client.GetTokenAccountBalance(context.TODO(), ata, rpc.CommitmentFinalized)
+	if err != nil {
+		return 0, nil
+	}
+
+	amount, err := strconv.ParseFloat(res.Value.Amount, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	decimals := res.Value.Decimals
+	if decimals == 0 {
+		decimals = 6
+	}
+
+	divisor := 1.0
+	for i := 0; i < int(decimals); i++ {
+		divisor *= 10
+	}
+
+	return amount / divisor, nil
+}
+
+func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error) {
+	devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
+	mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
+
+	usdcMint := os.Getenv("DEVNET_SOL_USDC_MINT")
+	usdtMint := os.Getenv("MAINNET_SOL_USDT_MINT")
+	usdgMint := os.Getenv("MAINNET_SOL_USDG_MINT")
+
+	if usdcMint != "" && devnetRPC != "" {
+		usdc, err = GetSPLBalance(walletPubKey, usdcMint, devnetRPC, "USDC")
+		if err != nil {
+			usdc = 0
+		}
+	}
+
+	if usdtMint != "" && mainnetRPC != "" {
+		usdt, err = GetSPLBalance(walletPubKey, usdtMint, mainnetRPC, "USDT")
+		if err != nil {
+			usdt = 0
+		}
+	}
+
+	if usdgMint != "" && mainnetRPC != "" {
+		usdg, err = GetSPLBalance(walletPubKey, usdgMint, mainnetRPC, "USDG")
+		if err != nil {
+			usdg = 0
+		}
+	}
+
+	return usdc, usdt, usdg, nil
 }
 
 func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64) (string, error) {
