@@ -14,12 +14,14 @@
         .status-badge { color: #00FF00; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; margin-bottom: 10px; display: block; }
         .nature-tag { background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; vertical-align: middle; text-transform: uppercase; margin-left: 5px; }
         h1 { font-size: 24px; margin: 0 0 20px 0; }
+        .greeting { color: #cccccc; line-height: 1.6; font-size: 15px; margin-bottom: 25px; }
         .txn-card { background: linear-gradient(145deg, #161616, #0d0d0d); border: 1px solid #333; padding: 25px; border-radius: 12px; margin: 20px 0; }
         .label { color: #888; font-size: 11px; text-transform: uppercase; margin-bottom: 5px; }
         .value { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 15px; }
         .detail-row { display: flex; justify-content: space-between; margin-top: 10px; border-top: 1px solid #222; padding-top: 10px; }
         .btn { display: block; background-color: #FF0000; color: #ffffff; text-align: center; padding: 15px; text-decoration: none; font-weight: 700; border-radius: 6px; margin-top: 30px; }
         .footer { padding: 20px; text-align: center; font-size: 11px; color: #444; }
+        .chain-badge { background: #1a1a1a; color: #FF0000; padding: 4px 10px; border-radius: 4px; font-size: 10px; text-transform: uppercase; font-weight: 700; display: inline-block; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -30,12 +32,14 @@
         <div class="content">
             <span class="status-badge">● {{.Status}}</span>
             <h1>{{.Type}} Successful <span class="nature-tag">{{.Nature}}</span></h1>
-            <p style="color: #888;">Your Vant account has been updated. The funds are ready for action.</p>
             
+            <p class="greeting">{{.Greeting}}</p>
+
             <div class="txn-card">
                 <div class="label">Amount</div>
-                <div class="value">{{printf "%.2f" .Amount}} {{.Currency}}</div>
-                
+                <div class="value">{{printf "%.2f" .Amount}} {{.Asset}}</div>
+                <span class="chain-badge">{{.Chain}}</span>
+
                 <div class="detail-row">
                     <span style="color: #666; font-size: 13px;">Transaction ID</span>
                     <span style="color: #fff; font-size: 13px;">{{.ID}}</span>
@@ -43,9 +47,19 @@
                 {{if .TxHash}}
                 <div class="detail-row">
                     <span style="color: #666; font-size: 13px;">On-Chain Hash</span>
-                    <span style="color: #fff; font-size: 13px;">{{.TxHash}}</span>
+                    <a href="{{.ExplorerLink}}" target="_blank" rel="noopener noreferrer" style="color: #FF0000; font-size: 13px; text-decoration: none;">
+                        View on {{.ExplorerName}} →
+                    </a>
                 </div>
                 {{end}}
+                <div class="detail-row">
+                    <span style="color: #666; font-size: 13px;">Nature</span>
+                    <span style="color: #fff; font-size: 13px; text-transform: uppercase;">{{.Nature}}</span>
+                </div>
+                <div class="detail-row">
+                    <span style="color: #666; font-size: 13px;">Chain</span>
+                    <span style="color: #fff; font-size: 13px; text-transform: uppercase;">{{.Chain}}</span>
+                </div>
             </div>
 
             <a href="https://vant.davidnzube.xyz/app" class="btn">Launch Terminal</a>
