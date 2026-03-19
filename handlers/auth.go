@@ -74,6 +74,19 @@ func Auth(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile: " + err.Error()})
 				return
 			}
+			// Notify indexer to whitelist this user's wallets
+			go func() {
+				wallet, err := db.GetWalletByEmail(c.Request.Context(), req.Email)
+				if err != nil {
+					log.Printf("Failed to fetch wallet for indexer notification: %v", err)
+					return
+				}
+				if err := services.NotifyIndexerWhitelist(wallet.Email, wallet.SolPublicKey, wallet.BasePublicKey); err != nil {
+					log.Printf("Failed to notify indexer for %s: %v", req.Email, err)
+				} else {
+					log.Printf("Indexer notified for new user: %s", req.Email)
+				}
+			}()
 			token, err := services.GenerateJWT(user.Email)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to generate auth token"})

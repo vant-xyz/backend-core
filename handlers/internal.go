@@ -74,3 +74,27 @@ func HandleInternalDeposit(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Deposit processed"})
 }
+
+func HandleIndexerWhitelist(c *gin.Context) {
+	var req struct {
+		Email         string `json:"email" binding:"required"`
+		SolPublicKey  string `json:"sol_public_key"`
+		BasePublicKey string `json:"base_public_key"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid whitelist payload"})
+		return
+	}
+
+	// Forward to indexer
+	go func() {
+		if err := services.NotifyIndexerWhitelist(req.Email, req.SolPublicKey, req.BasePublicKey); err != nil {
+			log.Printf("Failed to notify indexer for %s: %v", req.Email, err)
+		} else {
+			log.Printf("Indexer whitelist updated for: %s, SOL: %s, BASE: %s", req.Email, req.SolPublicKey, req.BasePublicKey)
+		}
+	}()
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Whitelist update received and forwarded to indexer"})
+}
