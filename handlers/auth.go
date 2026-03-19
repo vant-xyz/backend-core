@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -74,19 +75,20 @@ func Auth(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile: " + err.Error()})
 				return
 			}
-			// Notify indexer to whitelist this user's wallets
-			go func() {
-				wallet, err := db.GetWalletByEmail(c.Request.Context(), req.Email)
+			go func(email string) {
+				bgCtx := context.Background()
+				wallet, err := db.GetWalletByEmail(bgCtx, email)
 				if err != nil {
 					log.Printf("Failed to fetch wallet for indexer notification: %v", err)
 					return
 				}
+				log.Printf("Notifying indexer for %s: SOL=%s, BASE=%s", email, wallet.SolPublicKey, wallet.BasePublicKey)
 				if err := services.NotifyIndexerWhitelist(wallet.Email, wallet.SolPublicKey, wallet.BasePublicKey); err != nil {
-					log.Printf("Failed to notify indexer for %s: %v", req.Email, err)
+					log.Printf("Failed to notify indexer for %s: %v", email, err)
 				} else {
-					log.Printf("Indexer notified for new user: %s", req.Email)
+					log.Printf("Indexer notified for new user: %s", email)
 				}
-			}()
+			}(req.Email)
 			token, err := services.GenerateJWT(user.Email)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to generate auth token"})
