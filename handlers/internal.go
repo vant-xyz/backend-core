@@ -39,7 +39,7 @@ func HandleInternalDeposit(c *gin.Context) {
 	}
 
 	isDemo := strings.Contains(req.Network, "devnet") || strings.Contains(req.Network, "testnet")
-	
+
 	nature := "real"
 	dbField := req.Asset
 	if isDemo {
@@ -49,9 +49,8 @@ func HandleInternalDeposit(c *gin.Context) {
 		}
 	}
 
-	err := db.UpdateBalance(c.Request.Context(), req.Email, dbField, req.Amount)
-	if err != nil {
-		log.Printf("Internal Deposit Error: could not update field %s for %s: %v", dbField, req.Email, err)
+	if err := db.UpdateBalance(c.Request.Context(), req.Email, dbField, req.Amount); err != nil {
+		log.Printf("[Deposit] Failed to update field %s for %s: %v", dbField, req.Email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update user balance"})
 		return
 	}
@@ -69,7 +68,12 @@ func HandleInternalDeposit(c *gin.Context) {
 	}
 	db.SaveTransaction(c.Request.Context(), transaction)
 
-	go services.SendTransactionEmail(req.Email, transaction)
+	go func(toEmail string, tx models.Transaction) {
+		if err := services.SendTransactionEmail(toEmail, tx); err != nil {
+			log.Printf("[Email] Failed to send deposit email to %s (txID: %s): %v", toEmail, tx.ID, err)
+		}
+	}(req.Email, transaction)
+
 	services.PriceHub.BroadcastToUser(req.Email, "BALANCE_UPDATE")
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Deposit processed"})
@@ -87,12 +91,11 @@ func HandleIndexerWhitelist(c *gin.Context) {
 		return
 	}
 
-	// Forward to indexer
 	go func() {
 		if err := services.NotifyIndexerWhitelist(req.Email, req.SolPublicKey, req.BasePublicKey); err != nil {
-			log.Printf("Failed to notify indexer for %s: %v", req.Email, err)
+			log.Printf("[Indexer] Failed to notify indexer for %s: %v", req.Email, err)
 		} else {
-			log.Printf("Indexer whitelist updated for: %s, SOL: %s, BASE: %s", req.Email, req.SolPublicKey, req.BasePublicKey)
+			log.Printf("[Indexer] Whitelist updated for: %s, SOL: %s, BASE: %s", req.Email, req.SolPublicKey, req.BasePublicKey)
 		}
 	}()
 

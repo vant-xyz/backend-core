@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gagliardetto/solana-go"
 	computebudget "github.com/gagliardetto/solana-go/programs/compute-budget"
@@ -16,50 +18,78 @@ import (
 	"github.com/gagliardetto/solana-go/rpc/ws"
 )
 
+const rpcTimeout = 10 * time.Second
+
 func GetSolBalance(pubKey string) (float64, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	client := rpc.New(rpcURL)
 
 	account, err := solana.PublicKeyFromBase58(pubKey)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("invalid pubkey %s: %w", pubKey, err)
 	}
 
-	res, err := client.GetBalance(context.TODO(), account, rpc.CommitmentFinalized)
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+
+	res, err := client.GetBalance(ctx, account, rpc.CommitmentFinalized)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("GetBalance RPC failed for %s: %w", pubKey, err)
 	}
 
 	return float64(res.Value) / 1e9, nil
 }
 
-// GetSPLBalance fetches the balance of an SPL token for a given wallet
+// GetSPLBalance fetches the balance of an SPL token for a given wallet.
+// Returns (0, nil) when the ATA doesn't exist yet — that's normal for new wallets.
+// Returns (0, error) on real RPC failures.
 func GetSPLBalance(walletPubKey, mintPubKey, rpcURL, tokenName string) (float64, error) {
+	log.Printf("[SPL] Fetching %s balance for wallet %s", tokenName, walletPubKey)
+
 	client := rpc.New(rpcURL)
 
 	wallet, err := solana.PublicKeyFromBase58(walletPubKey)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("[SPL] invalid wallet pubkey %s: %w", walletPubKey, err)
 	}
 
 	mint, err := solana.PublicKeyFromBase58(mintPubKey)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("[SPL] invalid mint pubkey %s: %w", mintPubKey, err)
 	}
 
 	ata, _, err := solana.FindAssociatedTokenAddress(wallet, mint)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("[SPL] failed to derive ATA for wallet %s mint %s: %w", walletPubKey, mintPubKey, err)
 	}
 
-	res, err := client.GetTokenAccountBalance(context.TODO(), ata, rpc.CommitmentFinalized)
+	log.Printf("[SPL] %s ATA: %s", tokenName, ata.String())
+
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+
+	res, err := client.GetTokenAccountBalance(ctx, ata, rpc.CommitmentFinalized)
 	if err != nil {
+		// ATA not existing yet is normal — the RPC returns an error like
+		// "could not find account". Treat it as zero balance, not a failure.
+		errStr := err.Error()
+		if strings.Contains(errStr, "could not find account") ||
+			strings.Contains(errStr, "AccountNotFound") ||
+			strings.Contains(errStr, "Invalid param") {
+			log.Printf("[SPL] %s ATA not found (wallet has no %s yet): %s", tokenName, tokenName, ata.String())
+			return 0, nil
+		}
+		return 0, fmt.Errorf("[SPL] GetTokenAccountBalance RPC failed for %s (%s): %w", tokenName, ata.String(), err)
+	}
+
+	if res == nil || res.Value == nil {
+		log.Printf("[SPL] %s: nil response from RPC", tokenName)
 		return 0, nil
 	}
 
 	amount, err := strconv.ParseFloat(res.Value.Amount, 64)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("[SPL] failed to parse %s amount %q: %w", tokenName, res.Value.Amount, err)
 	}
 
 	decimals := res.Value.Decimals
@@ -72,10 +102,14 @@ func GetSPLBalance(walletPubKey, mintPubKey, rpcURL, tokenName string) (float64,
 		divisor *= 10
 	}
 
-	return amount / divisor, nil
+	balance := amount / divisor
+	log.Printf("[SPL] Fetched %s balance: %f", tokenName, balance)
+	return balance, nil
 }
 
 func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error) {
+	log.Printf("[SPL] GetAllSPLBalances for wallet %s", walletPubKey)
+
 	devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
 
@@ -83,62 +117,85 @@ func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error
 	usdtMint := os.Getenv("MAINNET_SOL_USDT_MINT")
 	usdgMint := os.Getenv("MAINNET_SOL_USDG_MINT")
 
+	var fetchErr error
+
 	if usdcMint != "" && devnetRPC != "" {
-		usdc, err = GetSPLBalance(walletPubKey, usdcMint, devnetRPC, "USDC")
-		if err != nil {
+		usdc, fetchErr = GetSPLBalance(walletPubKey, usdcMint, devnetRPC, "USDC")
+		if fetchErr != nil {
+			log.Printf("[SPL] USDC fetch error: %v", fetchErr)
+			err = fetchErr
 			usdc = 0
 		}
+	} else {
+		log.Printf("[SPL] Skipping USDC: mint=%q devnetRPC=%q", usdcMint, devnetRPC)
 	}
 
 	if usdtMint != "" && mainnetRPC != "" {
-		usdt, err = GetSPLBalance(walletPubKey, usdtMint, mainnetRPC, "USDT")
-		if err != nil {
+		usdt, fetchErr = GetSPLBalance(walletPubKey, usdtMint, mainnetRPC, "USDT")
+		if fetchErr != nil {
+			log.Printf("[SPL] USDT fetch error: %v", fetchErr)
+			if err == nil {
+				err = fetchErr
+			}
 			usdt = 0
 		}
+	} else {
+		log.Printf("[SPL] Skipping USDT: mint=%q mainnetRPC=%q", usdtMint, mainnetRPC)
 	}
 
 	if usdgMint != "" && mainnetRPC != "" {
-		usdg, err = GetSPLBalance(walletPubKey, usdgMint, mainnetRPC, "USDG")
-		if err != nil {
+		usdg, fetchErr = GetSPLBalance(walletPubKey, usdgMint, mainnetRPC, "USDG")
+		if fetchErr != nil {
+			log.Printf("[SPL] USDG fetch error: %v", fetchErr)
+			if err == nil {
+				err = fetchErr
+			}
 			usdg = 0
 		}
+	} else {
+		log.Printf("[SPL] Skipping USDG: mint=%q mainnetRPC=%q", usdgMint, mainnetRPC)
 	}
 
-	return usdc, usdt, usdg, nil
+	log.Printf("[SPL] Final balances — USDC: %f, USDT: %f, USDG: %f", usdc, usdt, usdg)
+	return usdc, usdt, usdg, err
 }
 
 func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64) (string, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
-	
+
 	client := rpc.New(rpcURL)
-	wsClient, err := ws.Connect(context.TODO(), wsURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	wsClient, err := ws.Connect(ctx, wsURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to websocket: %v", err)
+		return "", fmt.Errorf("failed to connect to websocket: %w", err)
 	}
 	defer wsClient.Close()
 
 	senderWallet, err := solana.WalletFromPrivateKeyBase58(senderPrivateKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to create sender wallet from private key: %v", err)
+		return "", fmt.Errorf("failed to create sender wallet from private key: %w", err)
 	}
 
 	feePayerSecret := os.Getenv("VANT_FEE_PAYER_SOLANA")
 	feePayerWallet, err := solana.WalletFromPrivateKeyBase58(feePayerSecret)
 	if err != nil {
-		return "", fmt.Errorf("failed to create fee payer wallet: %v", err)
+		return "", fmt.Errorf("failed to create fee payer wallet: %w", err)
 	}
 
 	dest, err := solana.PublicKeyFromBase58(recipientPublicKey)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid recipient pubkey %s: %w", recipientPublicKey, err)
 	}
 
 	lamports := uint64(amountSol * 1e9)
 
-	recent, err := client.GetLatestBlockhash(context.TODO(), rpc.CommitmentFinalized)
+	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("GetLatestBlockhash failed: %w", err)
 	}
 
 	tx, err := solana.NewTransaction(
@@ -154,7 +211,7 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 		solana.TransactionPayer(feePayerWallet.PublicKey()),
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to build transaction: %w", err)
 	}
 
 	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
@@ -167,17 +224,12 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to sign transaction: %w", err)
 	}
 
-	sig, err := confirm.SendAndConfirmTransaction(
-		context.TODO(),
-		client,
-		wsClient,
-		tx,
-	)
+	sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
 	}
 
 	return sig.String(), nil
@@ -186,33 +238,36 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 func FundDemoAccount(recipientPubKey string, amountSol float64) (string, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
-	
+
 	client := rpc.New(rpcURL)
-	wsClient, err := ws.Connect(context.TODO(), wsURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	wsClient, err := ws.Connect(ctx, wsURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to websocket: %v", err)
+		return "", fmt.Errorf("failed to connect to websocket: %w", err)
 	}
 	defer wsClient.Close()
 
 	faucetSecretRaw := os.Getenv("VANT_FAUCET_KEYPAIR")
 	var faucetBytes []byte
-	err = json.Unmarshal([]byte(faucetSecretRaw), &faucetBytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse faucet keypair: %v", err)
+	if err = json.Unmarshal([]byte(faucetSecretRaw), &faucetBytes); err != nil {
+		return "", fmt.Errorf("failed to parse faucet keypair: %w", err)
 	}
 
 	faucetWallet := &solana.Wallet{PrivateKey: solana.PrivateKey(faucetBytes)}
 
 	dest, err := solana.PublicKeyFromBase58(recipientPubKey)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid recipient pubkey %s: %w", recipientPubKey, err)
 	}
 
 	lamports := uint64(amountSol * 1e9)
 
-	recent, err := client.GetLatestBlockhash(context.TODO(), rpc.CommitmentFinalized)
+	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("GetLatestBlockhash failed: %w", err)
 	}
 
 	tx, err := solana.NewTransaction(
@@ -228,7 +283,7 @@ func FundDemoAccount(recipientPubKey string, amountSol float64) (string, error) 
 		solana.TransactionPayer(faucetWallet.PublicKey()),
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to build transaction: %w", err)
 	}
 
 	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
@@ -238,17 +293,12 @@ func FundDemoAccount(recipientPubKey string, amountSol float64) (string, error) 
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to sign transaction: %w", err)
 	}
 
-	sig, err := confirm.SendAndConfirmTransaction(
-		context.TODO(),
-		client,
-		wsClient,
-		tx,
-	)
+	sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
 	}
 
 	return sig.String(), nil
