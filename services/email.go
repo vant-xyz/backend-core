@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"log"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -15,13 +16,18 @@ import (
 func SendWaitlistEmail(toEmail, referralCode string) error {
 	from := os.Getenv("MAIL_GMAIL")
 	password := os.Getenv("MAIL_APP_PASSWORD")
+
+	if from == "" || password == "" {
+		return fmt.Errorf("email credentials not configured (MAIL_GMAIL or MAIL_APP_PASSWORD is empty)")
+	}
+
 	smtpHost := "smtp.gmail.com"
 	smtpPort := "587"
 
 	tmplPath := filepath.Join("templates", "waitlist.html")
 	tmpl, err := template.ParseFiles(tmplPath)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %v", err)
+		return fmt.Errorf("failed to parse waitlist template at %s: %w", tmplPath, err)
 	}
 
 	data := struct {
@@ -34,16 +40,13 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 	mimeHeaders := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 	body.Write([]byte(fmt.Sprintf("Subject: You're on the Vant waitlist! \n%s\n\n", mimeHeaders)))
 
-	err = tmpl.Execute(&body, data)
-	if err != nil {
-		return fmt.Errorf("failed to execute template: %v", err)
+	if err = tmpl.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute waitlist template: %w", err)
 	}
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
-
-	err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to send email: %v", err)
+	if err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes()); err != nil {
+		return fmt.Errorf("failed to send waitlist email to %s: %w", toEmail, err)
 	}
 
 	return nil
@@ -53,17 +56,16 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 type TransactionEmailData struct {
 	models.Transaction
 	UserEmail    string
-	Asset        string // Clean asset name (USDC, SOL, ETH, etc.)
-	Chain        string // Solana, Base
+	Asset        string
+	Chain        string
 	ExplorerLink string
 	ExplorerName string
 	Greeting     string
 }
 
-// getAssetAndChain extracts clean asset name and chain from currency code
 func getAssetAndChain(currency string) (asset, chain string) {
 	currency = strings.ToLower(currency)
-	
+
 	switch currency {
 	case "sol":
 		return "SOL", "Solana"
@@ -81,26 +83,22 @@ func getAssetAndChain(currency string) (asset, chain string) {
 		return "SOL", "Solana (Demo)"
 	case "demo_usdc_sol":
 		return "USDC", "Solana (Demo)"
-	case "demo_naira", "naira":
+	case "demo_naira", "naira", "ngn":
 		return "NGN", "Fiat"
 	default:
-		// Fallback: try to strip chain suffix
 		if strings.HasSuffix(currency, "_sol") {
-			asset = strings.ToUpper(strings.TrimSuffix(currency, "_sol"))
-			chain = "Solana"
+			return strings.ToUpper(strings.TrimSuffix(currency, "_sol")), "Solana"
 		} else if strings.HasSuffix(currency, "_base") {
-			asset = strings.ToUpper(strings.TrimSuffix(currency, "_base"))
-			chain = "Base"
-		} else {
-			asset = strings.ToUpper(currency)
-			chain = "Unknown"
+			return strings.ToUpper(strings.TrimSuffix(currency, "_base")), "Base"
 		}
-		return asset, chain
+		return strings.ToUpper(currency), "Unknown"
 	}
 }
 
-// getExplorerLink builds the blockchain explorer link
 func getExplorerLink(txHash, chain string) (link, name string) {
+	if txHash == "" {
+		return "", ""
+	}
 	chain = strings.ToLower(chain)
 	if strings.Contains(chain, "solana") {
 		return "https://solscan.io/tx/" + txHash, "Solscan"
@@ -110,14 +108,15 @@ func getExplorerLink(txHash, chain string) (link, name string) {
 	return "", ""
 }
 
-// generateGreeting creates personalized greeting
 func generateGreeting(email, txType, asset string) string {
-	// Extract name from email (before @)
 	localPart := strings.Split(email, "@")[0]
-	
-	// Capitalize first letter
-	name := strings.Title(strings.ReplaceAll(localPart, ".", " "))
-	
+	// Capitalize first letter only — strings.Title is deprecated
+	name := localPart
+	if len(localPart) > 0 {
+		name = strings.ToUpper(localPart[:1]) + localPart[1:]
+	}
+	name = strings.ReplaceAll(name, ".", " ")
+
 	var action string
 	switch txType {
 	case "deposit":
@@ -133,20 +132,32 @@ func generateGreeting(email, txType, asset string) string {
 	default:
 		action = "completed a transaction of"
 	}
-	
-	return fmt.Sprintf("Hey %s, you've just %s %s into your Vant wallet. Log in to your Vant account to explore trading opportunities and express your beliefs in crypto assets and more. Check out the details of your deposit below.", name, action, asset)
+
+	return fmt.Sprintf(
+		"Hey %s, you've just %s %s into your Vant wallet. Log in to your Vant account to explore trading opportunities and express your beliefs in crypto assets and more. Check out the details of your transaction below.",
+		name, action, asset,
+	)
 }
 
 func SendTransactionEmail(toEmail string, tx models.Transaction) error {
+	log.Printf("[Email] Sending %s transaction email to %s (txID: %s)", tx.Type, toEmail, tx.ID)
+
 	from := os.Getenv("MAIL_GMAIL")
 	password := os.Getenv("MAIL_APP_PASSWORD")
+
+	if from == "" || password == "" {
+		return fmt.Errorf("[Email] credentials not configured: MAIL_GMAIL or MAIL_APP_PASSWORD is empty")
+	}
+
 	smtpHost := "smtp.gmail.com"
 	smtpPort := "587"
 
 	tmplPath := filepath.Join("templates", "transaction.html")
+	log.Printf("[Email] Loading template from %s", tmplPath)
+
 	tmpl, err := template.ParseFiles(tmplPath)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %v", err)
+		return fmt.Errorf("[Email] failed to parse transaction template at %s: %w", tmplPath, err)
 	}
 
 	asset, chain := getAssetAndChain(tx.Currency)
@@ -167,17 +178,17 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 	mimeHeaders := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 	body.Write([]byte(fmt.Sprintf("Subject: Your Vant Transaction: %s\n%s\n\n", tx.ID, mimeHeaders)))
 
-	err = tmpl.Execute(&body, data)
-	if err != nil {
-		return fmt.Errorf("failed to execute template: %v", err)
+	if err = tmpl.Execute(&body, data); err != nil {
+		return fmt.Errorf("[Email] failed to execute transaction template: %w", err)
 	}
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
 
-	err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to send email: %v", err)
+	log.Printf("[Email] Sending via SMTP to %s", toEmail)
+	if err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes()); err != nil {
+		return fmt.Errorf("[Email] SMTP send failed to %s: %w", toEmail, err)
 	}
 
+	log.Printf("[Email] Successfully sent %s email to %s (txID: %s)", tx.Type, toEmail, tx.ID)
 	return nil
 }

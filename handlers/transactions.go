@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -30,8 +31,12 @@ func SendTransactionEmail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid transaction payload"})
 		return
 	}
-	
-	go services.SendTransactionEmail(tx.UserEmail, tx)
+
+	go func(toEmail string, transaction models.Transaction) {
+		if err := services.SendTransactionEmail(toEmail, transaction); err != nil {
+			log.Printf("[Email] Failed to send transaction email to %s (txID: %s): %v", toEmail, transaction.ID, err)
+		}
+	}(tx.UserEmail, tx)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

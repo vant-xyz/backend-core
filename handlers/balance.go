@@ -43,43 +43,50 @@ func SyncBalance(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[SyncBalance] Starting sync for %s (wallet: %s)", email, wallet.SolPublicKey)
+
 	onChainSol, err := services.GetSolBalance(wallet.SolPublicKey)
 	if err != nil {
+		log.Printf("[SyncBalance] Failed to fetch SOL balance for %s: %v", wallet.SolPublicKey, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch on-chain SOL balance"})
 		return
 	}
 
-	err = db.SetBalance(c.Request.Context(), email.(string), "demo_sol", onChainSol)
-	if err != nil {
+	log.Printf("[SyncBalance] SOL balance: %f", onChainSol)
+
+	if err = db.SetBalance(c.Request.Context(), email.(string), "demo_sol", onChainSol); err != nil {
+		log.Printf("[SyncBalance] Failed to update SOL balance for %s: %v", email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update SOL balance"})
 		return
 	}
 
-	usdc, usdt, usdg, err := services.GetAllSPLBalances(wallet.SolPublicKey)
-	if err != nil {
-		log.Printf("Error fetching SPL balances: %v", err)
+	usdc, usdt, usdg, splErr := services.GetAllSPLBalances(wallet.SolPublicKey)
+	if splErr != nil {
+		// SPL errors are non-fatal — SOL sync already succeeded.
+		// Log the error and continue; user gets SOL updated + whatever SPL succeeded.
+		log.Printf("[SyncBalance] SPL balance fetch partial error for %s: %v", wallet.SolPublicKey, splErr)
 	}
 
 	if usdc > 0 {
-		err = db.SetBalance(c.Request.Context(), email.(string), "demo_usdc_sol", usdc)
-		if err != nil {
-			log.Printf("Failed to update USDC balance: %v", err)
+		if err = db.SetBalance(c.Request.Context(), email.(string), "demo_usdc_sol", usdc); err != nil {
+			log.Printf("[SyncBalance] Failed to update USDC balance: %v", err)
 		}
 	}
 
 	if usdt > 0 {
-		err = db.SetBalance(c.Request.Context(), email.(string), "usdt_sol", usdt)
-		if err != nil {
-			log.Printf("Failed to update USDT balance: %v", err)
+		if err = db.SetBalance(c.Request.Context(), email.(string), "usdt_sol", usdt); err != nil {
+			log.Printf("[SyncBalance] Failed to update USDT balance: %v", err)
 		}
 	}
 
 	if usdg > 0 {
-		err = db.SetBalance(c.Request.Context(), email.(string), "usdg_sol", usdg)
-		if err != nil {
-			log.Printf("Failed to update USDG balance: %v", err)
+		if err = db.SetBalance(c.Request.Context(), email.(string), "usdg_sol", usdg); err != nil {
+			log.Printf("[SyncBalance] Failed to update USDG balance: %v", err)
 		}
 	}
+
+	log.Printf("[SyncBalance] Sync complete for %s — SOL: %f, USDC: %f, USDT: %f, USDG: %f",
+		email, onChainSol, usdc, usdt, usdg)
 
 	balance, _ := db.GetBalanceByEmail(c.Request.Context(), email.(string))
 	realNaira, demoNaira := services.ResolveNairaBalances(balance)
@@ -114,12 +121,18 @@ func SellAsset(c *gin.Context) {
 
 	currentAssetBalance := 0.0
 	switch req.Asset {
-	case "sol": currentAssetBalance = balance.Sol
-	case "eth_base": currentAssetBalance = balance.ETHBase
-	case "usdc_sol": currentAssetBalance = balance.USDCSol
-	case "usdc_base": currentAssetBalance = balance.USDCBase
-	case "demo_sol": currentAssetBalance = balance.DemoSol
-	case "demo_usdc_sol": currentAssetBalance = balance.DemoUSDCSol
+	case "sol":
+		currentAssetBalance = balance.Sol
+	case "eth_base":
+		currentAssetBalance = balance.ETHBase
+	case "usdc_sol":
+		currentAssetBalance = balance.USDCSol
+	case "usdc_base":
+		currentAssetBalance = balance.USDCBase
+	case "demo_sol":
+		currentAssetBalance = balance.DemoSol
+	case "demo_usdc_sol":
+		currentAssetBalance = balance.DemoUSDCSol
 	}
 
 	if req.Amount > currentAssetBalance {
@@ -129,8 +142,7 @@ func SellAsset(c *gin.Context) {
 
 	receiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
 
-	err = db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount)
-	if err != nil {
+	if err = db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to initiate deduction"})
 		return
 	}
@@ -139,21 +151,24 @@ func SellAsset(c *gin.Context) {
 		bgCtx := context.Background()
 		wallet, err := db.GetWalletByEmail(bgCtx, email)
 		if err != nil {
+			log.Printf("[Sell] Failed to get wallet for %s, reversing deduction: %v", email, err)
 			db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 			return
 		}
 
 		var txHash string
-		if (req.Asset == "demo_sol" || req.Asset == "sol") {
+		if req.Asset == "demo_sol" || req.Asset == "sol" {
 			decryptedPrivKey, err := services.Decrypt(wallet.SolPrivateKey)
 			if err != nil {
+				log.Printf("[Sell] Failed to decrypt private key for %s, reversing deduction: %v", email, err)
 				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
-			
+
 			vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
 			txHash, err = services.TransferSol(decryptedPrivKey, vaultPubKey, req.Amount)
 			if err != nil {
+				log.Printf("[Sell] On-chain transfer failed for %s, reversing deduction: %v", email, err)
 				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
@@ -164,9 +179,8 @@ func SellAsset(c *gin.Context) {
 			nairaField = "demo_naira"
 		}
 
-		err = db.UpdateBalance(bgCtx, email, nairaField, receiveNaira)
-		if err != nil {
-			log.Printf("Fatal: Failed to credit naira after successful on-chain move for %s", email)
+		if err = db.UpdateBalance(bgCtx, email, nairaField, receiveNaira); err != nil {
+			log.Printf("[Sell] CRITICAL: failed to credit naira after successful on-chain move for %s: %v", email, err)
 		}
 
 		transaction := models.Transaction{
@@ -181,8 +195,13 @@ func SellAsset(c *gin.Context) {
 			CreatedAt: time.Now(),
 		}
 		db.SaveTransaction(bgCtx, transaction)
-		
-		go services.SendTransactionEmail(email, transaction)
+
+		go func(toEmail string, tx models.Transaction) {
+			if err := services.SendTransactionEmail(toEmail, tx); err != nil {
+				log.Printf("[Email] Failed to send sell email to %s (txID: %s): %v", toEmail, tx.ID, err)
+			}
+		}(email, transaction)
+
 		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
 	}()
 
@@ -235,13 +254,13 @@ func FundDemoAccount(c *gin.Context) {
 
 	sig, err := services.FundDemoAccount(wallet.SolPublicKey, amountSol)
 	if err != nil {
+		log.Printf("[Faucet] FundDemoAccount failed for %s: %v", email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Faucet error: " + err.Error()})
 		return
 	}
 
-	err = db.UpdateBalance(c.Request.Context(), email, "demo_sol", amountSol)
-	if err != nil {
-		log.Printf("Error updating balance after faucet: %v", err)
+	if err = db.UpdateBalance(c.Request.Context(), email, "demo_sol", amountSol); err != nil {
+		log.Printf("[Faucet] Failed to update balance after faucet for %s: %v", email, err)
 	}
 
 	transaction := models.Transaction{
@@ -255,13 +274,16 @@ func FundDemoAccount(c *gin.Context) {
 		TxHash:    sig,
 		CreatedAt: time.Now(),
 	}
-	
-	err = db.SaveTransaction(c.Request.Context(), transaction)
-	if err != nil {
-		log.Printf("Error saving faucet transaction: %v", err)
+
+	if err = db.SaveTransaction(c.Request.Context(), transaction); err != nil {
+		log.Printf("[Faucet] Failed to save faucet transaction for %s: %v", email, err)
 	}
-	
-	go services.SendTransactionEmail(email, transaction)
+
+	go func(toEmail string, tx models.Transaction) {
+		if err := services.SendTransactionEmail(toEmail, tx); err != nil {
+			log.Printf("[Email] Failed to send faucet email to %s (txID: %s): %v", toEmail, tx.ID, err)
+		}
+	}(email, transaction)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
