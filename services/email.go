@@ -2,204 +2,153 @@ package services
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
-	"net/smtp"
+	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
 
 	"github.com/vant-xyz/backend-code/models"
 )
 
+type VASClient struct {
+	baseURL string
+	timeout time.Duration
+}
+
+func NewVASClient() *VASClient {
+	baseURL := os.Getenv("VANT_AUXILIARY_SERVICE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:3000" // fallback for local dev
+	}
+	return &VASClient{
+		baseURL: baseURL,
+		timeout: 30 * time.Second,
+	}
+}
+
+type SendWaitlistEmailRequest struct {
+	To           string `json:"to"`
+	ReferralCode string `json:"referralCode"`
+}
+
+type SendTransactionEmailRequest struct {
+	To        string  `json:"to"`
+	TxID      string  `json:"txId"`
+	TxType    string  `json:"txType"`
+	Amount    float64 `json:"amount"`
+	Currency  string  `json:"currency"`
+	Nature    string  `json:"nature"`
+	Status    string  `json:"status"`
+	TxHash    string  `json:"txHash,omitempty"`
+	CreatedAt string  `json:"createdAt,omitempty"`
+}
+
+type EmailResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
 func SendWaitlistEmail(toEmail, referralCode string) error {
-	from := os.Getenv("MAIL_GMAIL")
-	password := os.Getenv("MAIL_APP_PASSWORD")
+	log.Printf("[VAS] Sending waitlist email to %s", toEmail)
 
-	if from == "" || password == "" {
-		return fmt.Errorf("email credentials not configured (MAIL_GMAIL or MAIL_APP_PASSWORD is empty)")
-	}
-
-	smtpHost := "smtp.gmail.com"
-	ports := []string{"465", "587"}
-	var lastErr error
-
-	tmplPath := filepath.Join("templates", "waitlist.html")
-	tmpl, err := template.ParseFiles(tmplPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse waitlist template at %s: %w", tmplPath, err)
-	}
-
-	data := struct {
-		ReferralCode string
-	}{
+	reqBody := SendWaitlistEmailRequest{
+		To:           toEmail,
 		ReferralCode: referralCode,
 	}
 
-	var body bytes.Buffer
-	mimeHeaders := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
-	body.Write([]byte(fmt.Sprintf("Subject: You're on the Vant waitlist! \n%s\n\n", mimeHeaders)))
-
-	if err = tmpl.Execute(&body, data); err != nil {
-		return fmt.Errorf("failed to execute waitlist template: %w", err)
+	url := fmt.Sprintf("%s/api/email/waitlist", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
+	if url == "/api/email/waitlist" {
+		url = "http://localhost:3000/api/email/waitlist"
 	}
 
-	auth := smtp.PlainAuth("", from, password, smtpHost)
-
-	for _, port := range ports {
-		err = smtp.SendMail(smtpHost+":"+port, auth, from, []string{toEmail}, body.Bytes())
-		if err == nil {
-			return nil
-		}
-		lastErr = err
+	reqBodyJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("[VAS] failed to marshal request body: %w", err)
 	}
 
-	return fmt.Errorf("failed to send waitlist email to %s (all ports failed): %w", toEmail, lastErr)
-}
-
-type TransactionEmailData struct {
-	models.Transaction
-	UserEmail    string
-	Asset        string
-	Chain        string
-	ExplorerLink string
-	ExplorerName string
-	Greeting     string
-}
-
-func getAssetAndChain(currency string) (asset, chain string) {
-	currency = strings.ToLower(currency)
-
-	switch currency {
-	case "sol":
-		return "SOL", "Solana"
-	case "eth_base":
-		return "ETH", "Base"
-	case "usdc_sol":
-		return "USDC", "Solana"
-	case "usdc_base":
-		return "USDC", "Base"
-	case "usdt_sol":
-		return "USDT", "Solana"
-	case "usdg_sol":
-		return "USDG", "Solana"
-	case "demo_sol":
-		return "SOL", "Solana (Demo)"
-	case "demo_usdc_sol":
-		return "USDC", "Solana (Demo)"
-	case "demo_naira", "naira", "ngn":
-		return "NGN", "Fiat"
-	default:
-		if strings.HasSuffix(currency, "_sol") {
-			return strings.ToUpper(strings.TrimSuffix(currency, "_sol")), "Solana"
-		} else if strings.HasSuffix(currency, "_base") {
-			return strings.ToUpper(strings.TrimSuffix(currency, "_base")), "Base"
-		}
-		return strings.ToUpper(currency), "Unknown"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBodyJSON))
+	if err != nil {
+		return fmt.Errorf("[VAS] failed to create request: %w", err)
 	}
-}
+	req.Header.Set("Content-Type", "application/json")
 
-func getExplorerLink(txHash, chain string) (link, name string) {
-	if txHash == "" {
-		return "", ""
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("[VAS] failed to send request: %w", err)
 	}
-	chain = strings.ToLower(chain)
-	if strings.Contains(chain, "solana") {
-		return "https://solscan.io/tx/" + txHash, "Solscan"
-	} else if strings.Contains(chain, "base") {
-		return "https://basescan.org/tx/" + txHash, "Basescan"
-	}
-	return "", ""
-}
+	defer resp.Body.Close()
 
-func generateGreeting(email, txType, asset string) string {
-	localPart := strings.Split(email, "@")[0]
-	// Capitalize first letter only — strings.Title is deprecated
-	name := localPart
-	if len(localPart) > 0 {
-		name = strings.ToUpper(localPart[:1]) + localPart[1:]
-	}
-	name = strings.ReplaceAll(name, ".", " ")
-
-	var action string
-	switch txType {
-	case "deposit":
-		action = "received a new deposit of"
-	case "sell":
-		action = "sold assets for"
-	case "faucet":
-		action = "received demo funds of"
-	case "withdrawal":
-		action = "withdrew"
-	case "wager":
-		action = "participated in a wager for"
-	default:
-		action = "completed a transaction of"
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("[VAS] unexpected status code: %d", resp.StatusCode)
 	}
 
-	return fmt.Sprintf(
-		"Hey %s, you've just %s %s into your Vant wallet. Log in to your Vant account to explore trading opportunities and express your beliefs in crypto assets and more. Check out the details of your transaction below.",
-		name, action, asset,
-	)
+	var result EmailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("[VAS] failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("[VAS] email service returned failure: %s", result.Message)
+	}
+
+	log.Printf("[VAS] Successfully sent waitlist email to %s", toEmail)
+	return nil
 }
 
 func SendTransactionEmail(toEmail string, tx models.Transaction) error {
-	log.Printf("[Email] Sending %s transaction email to %s (txID: %s)", tx.Type, toEmail, tx.ID)
+	log.Printf("[VAS] Sending %s transaction email to %s (txID: %s)", tx.Type, toEmail, tx.ID)
 
-	from := os.Getenv("MAIL_GMAIL")
-	password := os.Getenv("MAIL_APP_PASSWORD")
-
-	if from == "" || password == "" {
-		return fmt.Errorf("[Email] credentials not configured: MAIL_GMAIL or MAIL_APP_PASSWORD is empty")
+	reqBody := SendTransactionEmailRequest{
+		To:        toEmail,
+		TxID:      tx.ID,
+		TxType:    tx.Type,
+		Amount:    tx.Amount,
+		Currency:  tx.Currency,
+		Nature:    tx.Nature,
+		Status:    tx.Status,
+		TxHash:    tx.TxHash,
+		CreatedAt: tx.CreatedAt.Format(time.RFC3339),
 	}
 
-	smtpHost := "smtp.gmail.com"
-	ports := []string{"465", "587"}
-	var lastErr error
+	url := fmt.Sprintf("%s/api/email/transaction", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
+	if url == "/api/email/transaction" {
+		url = "http://localhost:3000/api/email/transaction"
+	}
 
-	tmplPath := filepath.Join("templates", "transaction.html")
-	log.Printf("[Email] Loading template from %s", tmplPath)
-
-	tmpl, err := template.ParseFiles(tmplPath)
+	reqBodyJSON, err := json.Marshal(reqBody)
 	if err != nil {
-		return fmt.Errorf("[Email] failed to parse transaction template at %s: %w", tmplPath, err)
+		return fmt.Errorf("[VAS] failed to marshal request body: %w", err)
 	}
 
-	asset, chain := getAssetAndChain(tx.Currency)
-	explorerLink, explorerName := getExplorerLink(tx.TxHash, chain)
-	greeting := generateGreeting(toEmail, tx.Type, asset)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBodyJSON))
+	if err != nil {
+		return fmt.Errorf("[VAS] failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-	data := TransactionEmailData{
-		Transaction:  tx,
-		UserEmail:    toEmail,
-		Asset:        asset,
-		Chain:        chain,
-		ExplorerLink: explorerLink,
-		ExplorerName: explorerName,
-		Greeting:     greeting,
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("[VAS] failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("[VAS] unexpected status code: %d", resp.StatusCode)
 	}
 
-	var body bytes.Buffer
-	mimeHeaders := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
-	body.Write([]byte(fmt.Sprintf("Subject: Your Vant Transaction: %s\n%s\n\n", tx.ID, mimeHeaders)))
-
-	if err = tmpl.Execute(&body, data); err != nil {
-		return fmt.Errorf("[Email] failed to execute transaction template: %w", err)
+	var result EmailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("[VAS] failed to decode response: %w", err)
 	}
 
-	auth := smtp.PlainAuth("", from, password, smtpHost)
-
-	for _, port := range ports {
-		log.Printf("[Email] Attempting SMTP send to %s via %s:%s", toEmail, smtpHost, port)
-		err = smtp.SendMail(smtpHost+":"+port, auth, from, []string{toEmail}, body.Bytes())
-		if err == nil {
-			log.Printf("[Email] Successfully sent %s email to %s (txID: %s) via port %s", tx.Type, toEmail, tx.ID, port)
-			return nil
-		}
-		log.Printf("[Email] Port %s failed: %v", port, err)
-		lastErr = err
+	if !result.Success {
+		return fmt.Errorf("[VAS] email service returned failure: %s", result.Message)
 	}
 
-	return fmt.Errorf("[Email] all SMTP ports failed for %s: %w", toEmail, lastErr)
+	log.Printf("[VAS] Successfully sent transaction email to %s", toEmail)
+	return nil
 }
