@@ -22,7 +22,8 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 	}
 
 	smtpHost := "smtp.gmail.com"
-	smtpPort := "587"
+	ports := []string{"465", "587"}
+	var lastErr error
 
 	tmplPath := filepath.Join("templates", "waitlist.html")
 	tmpl, err := template.ParseFiles(tmplPath)
@@ -45,14 +46,18 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 	}
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
-	if err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes()); err != nil {
-		return fmt.Errorf("failed to send waitlist email to %s: %w", toEmail, err)
+
+	for _, port := range ports {
+		err = smtp.SendMail(smtpHost+":"+port, auth, from, []string{toEmail}, body.Bytes())
+		if err == nil {
+			return nil
+		}
+		lastErr = err
 	}
 
-	return nil
+	return fmt.Errorf("failed to send waitlist email to %s (all ports failed): %w", toEmail, lastErr)
 }
 
-// TransactionEmailData wraps transaction data for email template
 type TransactionEmailData struct {
 	models.Transaction
 	UserEmail    string
@@ -150,7 +155,8 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 	}
 
 	smtpHost := "smtp.gmail.com"
-	smtpPort := "587"
+	ports := []string{"465", "587"}
+	var lastErr error
 
 	tmplPath := filepath.Join("templates", "transaction.html")
 	log.Printf("[Email] Loading template from %s", tmplPath)
@@ -184,11 +190,16 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
 
-	log.Printf("[Email] Sending via SMTP to %s", toEmail)
-	if err = smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{toEmail}, body.Bytes()); err != nil {
-		return fmt.Errorf("[Email] SMTP send failed to %s: %w", toEmail, err)
+	for _, port := range ports {
+		log.Printf("[Email] Attempting SMTP send to %s via %s:%s", toEmail, smtpHost, port)
+		err = smtp.SendMail(smtpHost+":"+port, auth, from, []string{toEmail}, body.Bytes())
+		if err == nil {
+			log.Printf("[Email] Successfully sent %s email to %s (txID: %s) via port %s", tx.Type, toEmail, tx.ID, port)
+			return nil
+		}
+		log.Printf("[Email] Port %s failed: %v", port, err)
+		lastErr = err
 	}
 
-	log.Printf("[Email] Successfully sent %s email to %s (txID: %s)", tx.Type, toEmail, tx.ID)
-	return nil
+	return fmt.Errorf("[Email] all SMTP ports failed for %s: %w", toEmail, lastErr)
 }
