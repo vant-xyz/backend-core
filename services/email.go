@@ -58,9 +58,9 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 		ReferralCode: referralCode,
 	}
 
-	url := fmt.Sprintf("%s/api/email/waitlist", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
-	if url == "/api/email/waitlist" {
-		url = "http://localhost:3000/api/email/waitlist"
+	url := fmt.Sprintf("%s/email/waitlist", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
+	if url == "/email/waitlist" {
+		url = "http://localhost:3000/email/waitlist"
 	}
 
 	reqBodyJSON, err := json.Marshal(reqBody)
@@ -113,9 +113,9 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 		CreatedAt: tx.CreatedAt.Format(time.RFC3339),
 	}
 
-	url := fmt.Sprintf("%s/api/email/transaction", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
-	if url == "/api/email/transaction" {
-		url = "http://localhost:3000/api/email/transaction"
+	url := fmt.Sprintf("%s/email/transaction", os.Getenv("VANT_AUXILIARY_SERVICE_URL"))
+	if url == "/email/transaction" {
+		url = "http://localhost:3000/email/transaction"
 	}
 
 	reqBodyJSON, err := json.Marshal(reqBody)
