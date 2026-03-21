@@ -17,15 +17,15 @@ const PRODUCTION = false
 var cappmLog = log.New(os.Stdout, "[CAPPM-SERVICE] ", log.Ldate|log.Ltime|log.Lmicroseconds)
 
 type assetDurationConfig struct {
-	Asset        string
-	DataProvider string
-	Durations    []durationConfig
+	Asset            string
+	DataProvider     string
+	Durations        []durationConfig
 }
 
 type durationConfig struct {
-	Seconds          uint64
-	Label            string
-	VolatilityFactor float64
+	Seconds                 uint64
+	Label                   string
+	FallbackVolatilityFactor float64
 }
 
 var devAssetConfigs = []assetDurationConfig{
@@ -33,8 +33,8 @@ var devAssetConfigs = []assetDurationConfig{
 		Asset:        "BTC",
 		DataProvider: "Coinbase",
 		Durations: []durationConfig{
-			{Seconds: 180, Label: "3min", VolatilityFactor: 0.004},
-			{Seconds: 300, Label: "5min", VolatilityFactor: 0.006},
+			{Seconds: 180, Label: "3min", FallbackVolatilityFactor: 0.004},
+			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
 		},
 	},
 }
@@ -44,27 +44,27 @@ var prodAssetConfigs = []assetDurationConfig{
 		Asset:        "BTC",
 		DataProvider: "Coinbase",
 		Durations: []durationConfig{
-			{Seconds: 180, Label: "3min", VolatilityFactor: 0.004},
-			{Seconds: 300, Label: "5min", VolatilityFactor: 0.006},
-			{Seconds: 900, Label: "15min", VolatilityFactor: 0.010},
-			{Seconds: 21600, Label: "6hr", VolatilityFactor: 0.035},
+			{Seconds: 180, Label: "3min", FallbackVolatilityFactor: 0.004},
+			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
+			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
+			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
 		},
 	},
 	{
 		Asset:        "ETH",
 		DataProvider: "Coinbase",
 		Durations: []durationConfig{
-			{Seconds: 3600, Label: "1hr", VolatilityFactor: 0.020},
-			{Seconds: 21600, Label: "6hr", VolatilityFactor: 0.035},
+			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
+			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
 		},
 	},
 	{
 		Asset:        "SOL",
 		DataProvider: "Coinbase",
 		Durations: []durationConfig{
-			{Seconds: 1800, Label: "30min", VolatilityFactor: 0.015},
-			{Seconds: 3600, Label: "1hr", VolatilityFactor: 0.020},
-			{Seconds: 21600, Label: "6hr", VolatilityFactor: 0.035},
+			{Seconds: 1800, Label: "30min", FallbackVolatilityFactor: 0.015},
+			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
+			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
 		},
 	},
 }
@@ -84,7 +84,7 @@ func StartCAPPMService() {
 		total += len(a.Durations)
 	}
 
-	cappmLog.Printf("Starting CAPPM service — PRODUCTION=%v, loops=%d", PRODUCTION, total)
+	cappmLog.Printf("Starting — PRODUCTION=%v, loops=%d", PRODUCTION, total)
 
 	for _, assetCfg := range configs {
 		for _, dur := range assetCfg.Durations {
@@ -116,7 +116,7 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 			continue
 		}
 
-		cappmLog.Printf("[%s] No active market found, creating now", loopID)
+		cappmLog.Printf("[%s] No active market, creating now", loopID)
 
 		market, err := createNextCappm(asset, dur)
 		if err != nil {
@@ -142,11 +142,18 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 
 	momentumPriceCents, err := GetMomentumPrice(asset.Asset)
 	if err != nil {
-		cappmLog.Printf("Warning: could not fetch momentum price for %s, defaulting direction to Above: %v", asset.Asset, err)
+		cappmLog.Printf("[%s-%s] Momentum price unavailable, defaulting to Above: %v",
+			asset.Asset, dur.Label, err)
 		momentumPriceCents = currentPriceCents
 	}
 
-	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, dur.VolatilityFactor)
+	volatilityFactor := GetATRVolatilityFactor(asset.Asset, dur.Seconds, dur.FallbackVolatilityFactor)
+
+	cappmLog.Printf("[%s-%s] volatility_factor=%.6f (fallback=%.6f) current=%d momentum=%d",
+		asset.Asset, dur.Label, volatilityFactor, dur.FallbackVolatilityFactor,
+		currentPriceCents, momentumPriceCents)
+
+	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, volatilityFactor)
 
 	startTime := time.Now().UTC().Add(5 * time.Second)
 
