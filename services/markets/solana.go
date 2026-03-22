@@ -100,56 +100,100 @@ func stringLen(s string) int {
 	return 2 + len(s)
 }
 
-func buildRPCClients() (*rpc.Client, *ws.Client, context.CancelFunc, error) {
-	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
-	wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
-	client := rpc.New(rpcURL)
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	wsClient, err := ws.Connect(ctx, wsURL)
-	if err != nil {
-		cancel()
-		return nil, nil, nil, fmt.Errorf("ws connect failed: %w", err)
+// getFallbackRPCURLs returns the ordered list of RPC URLs to try.
+// DEVNET_SOLANA_RPC_URL is always tried first. DEVNET_SOLANA_RPC_URL_1 and
+// DEVNET_SOLANA_RPC_URL_2 are only tried if the previous URL fails.
+// Falls back to the public devnet endpoint if no env vars are set.
+func getFallbackRPCURLs() []string {
+	urls := []string{
+		os.Getenv("DEVNET_SOLANA_RPC_URL"),
+		os.Getenv("DEVNET_SOLANA_RPC_URL_1"),
+		os.Getenv("DEVNET_SOLANA_RPC_URL_2"),
 	}
-	return client, wsClient, cancel, nil
+
+	var valid []string
+	for _, url := range urls {
+		if url != "" {
+			valid = append(valid, url)
+		}
+	}
+
+	if len(valid) == 0 {
+		return []string{"https://api.devnet.solana.com"}
+	}
+
+	return valid
 }
 
+// sendAndConfirm builds, signs, and submits a transaction. It iterates through
+// all fallback RPC URLs — each URL gets a fresh WS connection and blockhash.
+// Transaction build and signing errors are terminal (not retried across URLs)
+// since they indicate a code-level problem, not an RPC availability problem.
 func sendAndConfirm(
-	client *rpc.Client,
-	wsClient *ws.Client,
-	ctx context.Context,
 	instructions []solana.Instruction,
 	signers []solana.PrivateKey,
 	feePayer solana.PublicKey,
 ) (string, error) {
-	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
-	if err != nil {
-		return "", fmt.Errorf("GetLatestBlockhash failed: %w", err)
+	rpcURLs := getFallbackRPCURLs()
+	var lastErr error
+
+	for _, rpcURL := range rpcURLs {
+		wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
+
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+
+		wsClient, err := ws.Connect(ctx, wsURL)
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("RPC %s ws connect failed: %w", rpcURL, err)
+			continue
+		}
+
+		client := rpc.New(rpcURL)
+		recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+		if err != nil {
+			wsClient.Close()
+			cancel()
+			lastErr = fmt.Errorf("RPC %s GetLatestBlockhash failed: %w", rpcURL, err)
+			continue
+		}
+
+		allInstructions := append(
+			[]solana.Instruction{computebudget.NewSetComputeUnitPriceInstruction(100000).Build()},
+			instructions...,
+		)
+
+		tx, err := solana.NewTransaction(allInstructions, recent.Value.Blockhash, solana.TransactionPayer(feePayer))
+		if err != nil {
+			wsClient.Close()
+			cancel()
+			return "", fmt.Errorf("failed to build transaction: %w", err)
+		}
+
+		keyMap := make(map[solana.PublicKey]*solana.PrivateKey, len(signers))
+		for i := range signers {
+			keyMap[signers[i].PublicKey()] = &signers[i]
+		}
+
+		if _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey { return keyMap[key] }); err != nil {
+			wsClient.Close()
+			cancel()
+			return "", fmt.Errorf("failed to sign transaction: %w", err)
+		}
+
+		sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
+		wsClient.Close()
+		cancel()
+
+		if err != nil {
+			lastErr = fmt.Errorf("RPC %s SendAndConfirmTransaction failed: %w", rpcURL, err)
+			continue
+		}
+
+		return sig.String(), nil
 	}
 
-	allInstructions := append(
-		[]solana.Instruction{computebudget.NewSetComputeUnitPriceInstruction(100000).Build()},
-		instructions...,
-	)
-
-	tx, err := solana.NewTransaction(allInstructions, recent.Value.Blockhash, solana.TransactionPayer(feePayer))
-	if err != nil {
-		return "", fmt.Errorf("failed to build transaction: %w", err)
-	}
-
-	keyMap := make(map[solana.PublicKey]*solana.PrivateKey, len(signers))
-	for i := range signers {
-		keyMap[signers[i].PublicKey()] = &signers[i]
-	}
-
-	if _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey { return keyMap[key] }); err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %w", err)
-	}
-
-	sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
-	if err != nil {
-		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
-	}
-	return sig.String(), nil
+	return "", fmt.Errorf("all RPC endpoints failed: %w", lastErr)
 }
 
 // buildEd25519VerifyInstruction constructs the Ed25519Program verify instruction
@@ -271,17 +315,7 @@ func CreateMarketCAPPM(params CreateMarketCAPPMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	client, wsClient, cancel, err := buildRPCClients()
-	if err != nil {
-		return "", err
-	}
-	defer cancel()
-	defer wsClient.Close()
-
-	ctx, txCancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer txCancel()
-
-	return sendAndConfirm(client, wsClient, ctx, []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	return sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 }
 
 type CreateMarketGEMParams struct {
@@ -331,17 +365,7 @@ func CreateMarketGEM(params CreateMarketGEMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	client, wsClient, cancel, err := buildRPCClients()
-	if err != nil {
-		return "", err
-	}
-	defer cancel()
-	defer wsClient.Close()
-
-	ctx, txCancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer txCancel()
-
-	return sendAndConfirm(client, wsClient, ctx, []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	return sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 }
 
 func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
@@ -392,17 +416,7 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
 	}, data)
 
-	client, wsClient, cancel, err := buildRPCClients()
-	if err != nil {
-		return "", err
-	}
-	defer cancel()
-	defer wsClient.Close()
-
-	ctx, txCancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer txCancel()
-
-	return sendAndConfirm(client, wsClient, ctx,
+	return sendAndConfirm(
 		[]solana.Instruction{ed25519Ix, settleIx},
 		[]solana.PrivateKey{settlerKey},
 		settlerPub,
@@ -462,17 +476,7 @@ func SettleMarketGEM(marketID string, outcome uint8, outcomeDescription string) 
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
 	}, data)
 
-	client, wsClient, cancel, err := buildRPCClients()
-	if err != nil {
-		return "", err
-	}
-	defer cancel()
-	defer wsClient.Close()
-
-	ctx, txCancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer txCancel()
-
-	return sendAndConfirm(client, wsClient, ctx,
+	return sendAndConfirm(
 		[]solana.Instruction{ed25519Ix, settleIx},
 		[]solana.PrivateKey{settlerKey},
 		settlerPub,
@@ -501,27 +505,35 @@ type OnchainMarket struct {
 	OutcomeDescription string
 }
 
+// GetMarketOnchain fetches raw account data from Solana with fallback RPC support.
 func GetMarketOnchain(marketID string) (*OnchainMarket, error) {
 	marketPDA, _, err := deriveMarketPDA(marketID)
 	if err != nil {
 		return nil, err
 	}
 
-	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
-	client := rpc.New(rpcURL)
+	rpcURLs := getFallbackRPCURLs()
+	var lastErr error
 
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
+	for _, rpcURL := range rpcURLs {
+		client := rpc.New(rpcURL)
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 
-	accountInfo, err := client.GetAccountInfo(ctx, marketPDA)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch market account: %w", err)
+		accountInfo, err := client.GetAccountInfo(ctx, marketPDA)
+		cancel()
+
+		if err != nil {
+			lastErr = fmt.Errorf("RPC %s GetAccountInfo failed: %w", rpcURL, err)
+			continue
+		}
+		if accountInfo == nil || accountInfo.Value == nil {
+			return nil, fmt.Errorf("market account not found: %s", marketID)
+		}
+
+		return unpackOnchainMarket(marketID, accountInfo.Value.Data.GetBinary())
 	}
-	if accountInfo == nil || accountInfo.Value == nil {
-		return nil, fmt.Errorf("market account not found: %s", marketID)
-	}
 
-	return unpackOnchainMarket(marketID, accountInfo.Value.Data.GetBinary())
+	return nil, fmt.Errorf("all RPC endpoints failed: %w", lastErr)
 }
 
 func unpackOnchainMarket(marketID string, raw []byte) (*OnchainMarket, error) {
