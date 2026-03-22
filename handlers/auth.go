@@ -10,8 +10,6 @@ import (
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 	"github.com/vant-xyz/backend-code/services"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func CheckEmailExists(c *gin.Context) {
@@ -25,11 +23,7 @@ func CheckEmailExists(c *gin.Context) {
 
 	_, err := db.GetUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			c.JSON(http.StatusOK, gin.H{"exists": false})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Database error"})
+		c.JSON(http.StatusOK, gin.H{"exists": false})
 		return
 	}
 
@@ -63,46 +57,51 @@ func Auth(c *gin.Context) {
 
 	user, err := db.GetUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			hashedPassword, err := services.HashPassword(req.Password)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to secure password"})
-				return
-			}
-			user, err = db.CreateUser(c.Request.Context(), req.Email, hashedPassword)
-			if err != nil {
-				log.Printf("Signup Error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile: " + err.Error()})
-				return
-			}
-			go func(email string) {
-				bgCtx := context.Background()
-				wallet, err := db.GetWalletByEmail(bgCtx, email)
-				if err != nil {
-					log.Printf("Failed to fetch wallet for indexer notification: %v", err)
-					return
-				}
-				log.Printf("Notifying indexer for %s: SOL=%s, BASE=%s", email, wallet.SolPublicKey, wallet.BasePublicKey)
-				if err := services.NotifyIndexerWhitelist(wallet.Email, wallet.SolPublicKey, wallet.BasePublicKey); err != nil {
-					log.Printf("Failed to notify indexer for %s: %v", email, err)
-				} else {
-					log.Printf("Indexer notified for new user: %s", email)
-				}
-			}(req.Email)
-			token, err := services.GenerateJWT(user.Email)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to generate auth token"})
-				return
-			}
-			c.JSON(http.StatusOK, models.AuthResponse{
-				Success: true,
-				Message: "Account created successfully",
-				Token:   token,
-				User:    user,
-			})
+		hashedPassword, err := services.HashPassword(req.Password)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to secure password"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Database error"})
+
+		wallet, err := services.GenerateWallet(req.Email)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to generate wallet"})
+			return
+		}
+
+		user, err = db.CreateUser(c.Request.Context(), req.Email, hashedPassword, wallet)
+		if err != nil {
+			log.Printf("Signup Error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create user profile: " + err.Error()})
+			return
+		}
+
+		go func(email string) {
+			bgCtx := context.Background()
+			wallet, err := db.GetWalletByEmail(bgCtx, email)
+			if err != nil {
+				log.Printf("Failed to fetch wallet for indexer notification: %v", err)
+				return
+			}
+			log.Printf("Notifying indexer for %s: SOL=%s, BASE=%s", email, wallet.SolPublicKey, wallet.BasePublicKey)
+			if err := services.NotifyIndexerWhitelist(wallet.Email, wallet.SolPublicKey, wallet.BasePublicKey); err != nil {
+				log.Printf("Failed to notify indexer for %s: %v", email, err)
+			} else {
+				log.Printf("Indexer notified for new user: %s", email)
+			}
+		}(req.Email)
+
+		token, err := services.GenerateJWT(user.Email)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to generate auth token"})
+			return
+		}
+		c.JSON(http.StatusOK, models.AuthResponse{
+			Success: true,
+			Message: "Account created successfully",
+			Token:   token,
+			User:    user,
+		})
 		return
 	}
 
@@ -138,8 +137,7 @@ func UpdateUsername(c *gin.Context) {
 		return
 	}
 
-	err := db.UpdateUsername(c.Request.Context(), req.Email, req.Username)
-	if err != nil {
+	if err := db.UpdateUsername(c.Request.Context(), req.Email, req.Username); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
