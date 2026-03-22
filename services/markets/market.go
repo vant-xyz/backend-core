@@ -6,17 +6,12 @@ import (
 	"log"
 	"time"
 
-	"cloud.google.com/go/firestore"
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 	"github.com/vant-xyz/backend-code/utils"
-	"google.golang.org/api/iterator"
 )
 
-const (
-	marketsCollection = "markets"
-	defaultCurrency   = "NGN"
-)
+const defaultCurrency = "NGN"
 
 type CreateCAPPMInput struct {
 	Title           string
@@ -102,8 +97,8 @@ func CreateCAPPM(ctx context.Context, input CreateCAPPMInput) (*models.Market, e
 		CurrentPrice:    input.CurrentPrice,
 	}
 
-	if err := saveMarket(ctx, market); err != nil {
-		return nil, fmt.Errorf("failed to save CAPPM market to Firestore: %w", err)
+	if err := db.SaveMarket(ctx, market); err != nil {
+		return nil, fmt.Errorf("failed to save CAPPM market: %w", err)
 	}
 
 	spawnSettlementTimer(market)
@@ -157,8 +152,8 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 		CreationTxHash:  txHash,
 	}
 
-	if err := saveMarket(ctx, market); err != nil {
-		return nil, fmt.Errorf("failed to save GEM market to Firestore: %w", err)
+	if err := db.SaveMarket(ctx, market); err != nil {
+		return nil, fmt.Errorf("failed to save GEM market: %w", err)
 	}
 
 	log.Printf("[Markets] CreateGEM complete: id=%s pda=%s tx=%s", marketID, marketPDA, txHash)
@@ -185,26 +180,21 @@ func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) err
 	}
 
 	outcome := resolveCAPPMOutcome(market.Direction, market.TargetPrice, endPriceCents)
-
 	dollars := endPriceCents / 100
 	cents := endPriceCents % 100
-	outcomeDescription := fmt.Sprintf(
-		"%s closed at $%d.%02d on %s",
-		market.Asset, dollars, cents, market.DataProvider,
-	)
+	outcomeDescription := fmt.Sprintf("%s closed at $%d.%02d on %s",
+		market.Asset, dollars, cents, market.DataProvider)
 
 	now := time.Now()
-	updates := []firestore.Update{
-		{Path: "status", Value: string(models.MarketStatusResolved)},
-		{Path: "outcome", Value: string(outcome)},
-		{Path: "outcome_description", Value: outcomeDescription},
-		{Path: "end_price", Value: endPriceCents},
-		{Path: "settlement_tx_hash", Value: txHash},
-		{Path: "resolved_at", Value: now},
-	}
-
-	if err := updateMarket(ctx, marketID, updates); err != nil {
-		return fmt.Errorf("failed to update CAPPM market in Firestore after settlement: %w", err)
+	if err := db.UpdateMarketFields(ctx, marketID, map[string]interface{}{
+		"status":              string(models.MarketStatusResolved),
+		"outcome":             string(outcome),
+		"outcome_description": outcomeDescription,
+		"end_price":           endPriceCents,
+		"settlement_tx_hash":  txHash,
+		"resolved_at":         now,
+	}); err != nil {
+		return fmt.Errorf("failed to update CAPPM market after settlement: %w", err)
 	}
 
 	log.Printf("[Markets] SettleCAPPM complete: id=%s outcome=%s endPrice=%d tx=%s",
@@ -237,16 +227,14 @@ func SettleGEM(ctx context.Context, input SettleGEMInput) error {
 	}
 
 	now := time.Now()
-	updates := []firestore.Update{
-		{Path: "status", Value: string(models.MarketStatusResolved)},
-		{Path: "outcome", Value: string(input.Outcome)},
-		{Path: "outcome_description", Value: input.OutcomeDescription},
-		{Path: "settlement_tx_hash", Value: txHash},
-		{Path: "resolved_at", Value: now},
-	}
-
-	if err := updateMarket(ctx, input.MarketID, updates); err != nil {
-		return fmt.Errorf("failed to update GEM market in Firestore after settlement: %w", err)
+	if err := db.UpdateMarketFields(ctx, input.MarketID, map[string]interface{}{
+		"status":              string(models.MarketStatusResolved),
+		"outcome":             string(input.Outcome),
+		"outcome_description": input.OutcomeDescription,
+		"settlement_tx_hash":  txHash,
+		"resolved_at":         now,
+	}); err != nil {
+		return fmt.Errorf("failed to update GEM market after settlement: %w", err)
 	}
 
 	log.Printf("[Markets] SettleGEM complete: id=%s outcome=%s tx=%s",
@@ -262,39 +250,36 @@ func SyncMarketFromChain(ctx context.Context, marketID string) (*models.Market, 
 
 	market, err := GetMarketByID(ctx, marketID)
 	if err != nil {
-		return nil, fmt.Errorf("market not found in Firestore: %w", err)
+		return nil, fmt.Errorf("market not found in DB: %w", err)
 	}
 
-	updates := []firestore.Update{}
+	fields := map[string]interface{}{}
 
 	if onchain.IsResolved && market.Status != models.MarketStatusResolved {
-		updates = append(updates, firestore.Update{Path: "status", Value: string(models.MarketStatusResolved)})
+		fields["status"] = string(models.MarketStatusResolved)
+		fields["outcome_description"] = onchain.OutcomeDescription
+		fields["resolved_at"] = time.Now()
 
 		if onchain.Outcome != nil {
 			outcome := models.OutcomeYes
 			if *onchain.Outcome == 1 {
 				outcome = models.OutcomeNo
 			}
-			updates = append(updates, firestore.Update{Path: "outcome", Value: string(outcome)})
+			fields["outcome"] = string(outcome)
 		}
 
 		if onchain.EndPrice != nil {
-			updates = append(updates, firestore.Update{Path: "end_price", Value: *onchain.EndPrice})
+			fields["end_price"] = *onchain.EndPrice
 		}
-
-		updates = append(updates, firestore.Update{Path: "outcome_description", Value: onchain.OutcomeDescription})
-
-		now := time.Now()
-		updates = append(updates, firestore.Update{Path: "resolved_at", Value: now})
 	}
 
 	if onchain.CurrentPrice != nil {
-		updates = append(updates, firestore.Update{Path: "current_price", Value: *onchain.CurrentPrice})
+		fields["current_price"] = *onchain.CurrentPrice
 	}
 
-	if len(updates) > 0 {
-		if err := updateMarket(ctx, marketID, updates); err != nil {
-			return nil, fmt.Errorf("failed to sync market updates to Firestore: %w", err)
+	if len(fields) > 0 {
+		if err := db.UpdateMarketFields(ctx, marketID, fields); err != nil {
+			return nil, fmt.Errorf("failed to sync market updates to DB: %w", err)
 		}
 	}
 
@@ -302,46 +287,27 @@ func SyncMarketFromChain(ctx context.Context, marketID string) (*models.Market, 
 }
 
 func GetMarketByID(ctx context.Context, marketID string) (*models.Market, error) {
-	doc, err := db.Client.Collection(marketsCollection).Doc(marketID).Get(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get market %s: %w", marketID, err)
-	}
-	var market models.Market
-	if err := doc.DataTo(&market); err != nil {
-		return nil, fmt.Errorf("failed to deserialize market %s: %w", marketID, err)
-	}
-	return &market, nil
+	return db.GetMarketByID(ctx, marketID)
 }
 
 func GetActiveMarkets(ctx context.Context) ([]models.Market, error) {
-	return queryMarkets(ctx, db.Client.Collection(marketsCollection).
-		Where("status", "==", string(models.MarketStatusActive)).
-		OrderBy("created_at", firestore.Desc))
+	return db.GetActiveMarkets(ctx)
 }
 
 func GetResolvedMarkets(ctx context.Context) ([]models.Market, error) {
-	return queryMarkets(ctx, db.Client.Collection(marketsCollection).
-		Where("status", "==", string(models.MarketStatusResolved)).
-		OrderBy("resolved_at", firestore.Desc))
+	return db.GetResolvedMarkets(ctx)
 }
 
 func GetMarketsByType(ctx context.Context, marketType models.MarketType) ([]models.Market, error) {
-	return queryMarkets(ctx, db.Client.Collection(marketsCollection).
-		Where("market_type", "==", string(marketType)).
-		OrderBy("created_at", firestore.Desc))
+	return db.GetMarketsByType(ctx, marketType)
 }
 
 func GetMarketsByAsset(ctx context.Context, asset string) ([]models.Market, error) {
-	return queryMarkets(ctx, db.Client.Collection(marketsCollection).
-		Where("asset", "==", asset).
-		OrderBy("created_at", firestore.Desc))
+	return db.GetMarketsByAsset(ctx, asset)
 }
 
 func GetActiveMarketsByType(ctx context.Context, marketType models.MarketType) ([]models.Market, error) {
-	return queryMarkets(ctx, db.Client.Collection(marketsCollection).
-		Where("status", "==", string(models.MarketStatusActive)).
-		Where("market_type", "==", string(marketType)).
-		OrderBy("created_at", firestore.Desc))
+	return db.GetActiveMarketsByType(ctx, marketType)
 }
 
 func spawnSettlementTimer(market *models.Market) {
@@ -350,7 +316,6 @@ func spawnSettlementTimer(market *models.Market) {
 		if delay < 0 {
 			delay = 0
 		}
-
 		log.Printf("[Markets] Settlement timer started: id=%s fires_in=%.0fs", market.ID, delay.Seconds())
 		time.Sleep(delay)
 
@@ -382,37 +347,6 @@ func autoSettleCAPPM(ctx context.Context, marketID, asset string) error {
 	return SettleCAPPM(ctx, marketID, endPriceCents)
 }
 
-func saveMarket(ctx context.Context, market *models.Market) error {
-	_, err := db.Client.Collection(marketsCollection).Doc(market.ID).Set(ctx, market)
-	return err
-}
-
-func updateMarket(ctx context.Context, marketID string, updates []firestore.Update) error {
-	_, err := db.Client.Collection(marketsCollection).Doc(marketID).Update(ctx, updates)
-	return err
-}
-
-func queryMarkets(ctx context.Context, q firestore.Query) ([]models.Market, error) {
-	iter := q.Documents(ctx)
-	var markets []models.Market
-	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error iterating markets: %w", err)
-		}
-		var market models.Market
-		if err := doc.DataTo(&market); err != nil {
-			log.Printf("[Markets] Failed to deserialize market doc %s: %v", doc.Ref.ID, err)
-			continue
-		}
-		markets = append(markets, market)
-	}
-	return markets, nil
-}
-
 func resolveCAPPMOutcome(direction models.MarketDirection, targetPrice, endPrice uint64) models.MarketOutcome {
 	switch direction {
 	case models.DirectionAbove:
@@ -428,4 +362,7 @@ func resolveCAPPMOutcome(direction models.MarketDirection, targetPrice, endPrice
 	default:
 		return models.OutcomeNo
 	}
+}
+func GetMarketOnchainData(marketID string) (*OnchainMarket, error) {
+	return GetMarketOnchain(marketID)
 }

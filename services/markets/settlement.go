@@ -6,26 +6,22 @@ import (
 	"log"
 	"time"
 
-	"cloud.google.com/go/firestore"
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
-	"github.com/vant-xyz/backend-code/services"
 	"github.com/vant-xyz/backend-code/utils"
 )
 
-const settlementsCollection = "settlement_payouts"
-
 type Payout struct {
-	ID            string    `json:"id" firestore:"id"`
-	MarketID      string    `json:"market_id" firestore:"market_id"`
-	PositionID    string    `json:"position_id" firestore:"position_id"`
-	UserEmail     string    `json:"user_email" firestore:"user_email"`
-	Shares        float64   `json:"shares" firestore:"shares"`
-	PayoutAmount  float64   `json:"payout_amount" firestore:"payout_amount"`
-	QuoteCurrency string    `json:"quote_currency" firestore:"quote_currency"`
-	Processed     bool      `json:"processed" firestore:"processed"`
-	CreatedAt     time.Time `json:"created_at" firestore:"created_at"`
-	ProcessedAt   *time.Time `json:"processed_at,omitempty" firestore:"processed_at"`
+	ID            string     `json:"id"`
+	MarketID      string     `json:"market_id"`
+	PositionID    string     `json:"position_id"`
+	UserEmail     string     `json:"user_email"`
+	Shares        float64    `json:"shares"`
+	PayoutAmount  float64    `json:"payout_amount"`
+	QuoteCurrency string     `json:"quote_currency"`
+	Processed     bool       `json:"processed"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ProcessedAt   *time.Time `json:"processed_at,omitempty"`
 }
 
 type MarketSettlementResult struct {
@@ -39,26 +35,16 @@ type MarketSettlementResult struct {
 	SettledAt      time.Time `json:"settled_at"`
 }
 
-// ProcessMarketSettlement is the entry point for settling a market.
-// It is fully idempotent — safe to call multiple times for the same market.
-// Sequence:
-//   1. Validate market is resolved onchain
-//   2. Calculate payouts for all active positions
-//   3. Distribute payouts (idempotent per position via payout record)
-//   4. Refund all open orders
-//   5. Close matching engine goroutine
-//   6. Broadcast settlement event to all subscribers
 func ProcessMarketSettlement(ctx context.Context, marketID string, outcome models.MarketOutcome) (*MarketSettlementResult, error) {
 	market, err := GetMarketByID(ctx, marketID)
 	if err != nil {
 		return nil, fmt.Errorf("market not found: %w", err)
 	}
-
 	if market.Status != models.MarketStatusResolved {
 		return nil, fmt.Errorf("market %s is not resolved yet", marketID)
 	}
 
-	log.Printf("[Settlement] Starting settlement: market=%s outcome=%s", marketID, outcome)
+	log.Printf("[Settlement] Starting: market=%s outcome=%s", marketID, outcome)
 
 	payouts, err := CalculatePayouts(ctx, marketID, outcome, market.QuoteCurrency)
 	if err != nil {
@@ -100,33 +86,37 @@ func ProcessMarketSettlement(ctx context.Context, marketID string, outcome model
 	return result, nil
 }
 
-// CalculatePayouts builds payout records for every active position in a market.
-// Records are written to Firestore before distribution so we can resume if the
-// process crashes halfway through.
 func CalculatePayouts(ctx context.Context, marketID string, outcome models.MarketOutcome, quoteCurrency string) ([]Payout, error) {
 	positions, err := GetMarketPositions(ctx, marketID, models.PositionStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch active positions: %w", err)
 	}
-
 	if len(positions) == 0 {
 		log.Printf("[Settlement] No active positions for market %s", marketID)
 		return nil, nil
 	}
 
-	payouts := make([]Payout, 0, len(positions))
 	now := time.Now()
-
-	batch := db.Client.Batch()
-	batchCount := 0
+	payouts := make([]Payout, 0, len(positions))
+	batch := make([]db.PayoutRecord, 0, len(positions))
 
 	for _, pos := range positions {
-		existing, err := getExistingPayout(ctx, marketID, pos.ID)
+		existing, err := db.GetExistingPayout(ctx, marketID, pos.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check existing payout for position %s: %w", pos.ID, err)
 		}
 		if existing != nil {
-			payouts = append(payouts, *existing)
+			payouts = append(payouts, Payout{
+				ID:            existing.ID,
+				MarketID:      existing.MarketID,
+				PositionID:    existing.PositionID,
+				UserEmail:     existing.UserEmail,
+				Shares:        existing.Shares,
+				PayoutAmount:  existing.PayoutAmount,
+				QuoteCurrency: existing.QuoteCurrency,
+				Processed:     existing.Processed,
+				CreatedAt:     now,
+			})
 			continue
 		}
 
@@ -150,24 +140,22 @@ func CalculatePayouts(ctx context.Context, marketID string, outcome models.Marke
 			CreatedAt:     now,
 		}
 
-		docRef := db.Client.Collection(settlementsCollection).Doc(payout.ID)
-		batch.Set(docRef, payout)
-		batchCount++
-
+		batch = append(batch, db.PayoutRecord{
+			ID:            payout.ID,
+			MarketID:      payout.MarketID,
+			PositionID:    payout.PositionID,
+			UserEmail:     payout.UserEmail,
+			Shares:        payout.Shares,
+			PayoutAmount:  payout.PayoutAmount,
+			QuoteCurrency: payout.QuoteCurrency,
+			Processed:     false,
+		})
 		payouts = append(payouts, payout)
-
-		if batchCount == 400 {
-			if _, err := batch.Commit(ctx); err != nil {
-				return nil, fmt.Errorf("failed to commit payout batch: %w", err)
-			}
-			batch = db.Client.Batch()
-			batchCount = 0
-		}
 	}
 
-	if batchCount > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("failed to commit final payout batch: %w", err)
+	if len(batch) > 0 {
+		if err := db.SavePayoutRecordsBatch(ctx, batch); err != nil {
+			return nil, fmt.Errorf("failed to save payout records: %w", err)
 		}
 	}
 
@@ -175,8 +163,6 @@ func CalculatePayouts(ctx context.Context, marketID string, outcome models.Marke
 	return payouts, nil
 }
 
-// DistributePayouts processes each payout record — credits winners and marks
-// all positions settled. Skips already-processed payouts (idempotent).
 func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float64, winCount, loseCount int, err error) {
 	for i := range payouts {
 		payout := &payouts[i]
@@ -191,21 +177,20 @@ func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float
 			continue
 		}
 
-		if err := SettlePosition(ctx, payout.PositionID, outcomeFromPayout(payout)); err != nil {
+		outcomeForPosition := models.OutcomeNo
+		if payout.PayoutAmount > 0 {
+			outcomeForPosition = models.OutcomeYes
+		}
+
+		if err := SettlePosition(ctx, payout.PositionID, outcomeForPosition); err != nil {
 			log.Printf("[Settlement] CRITICAL: failed to settle position %s for user %s: %v",
 				payout.PositionID, payout.UserEmail, err)
 			continue
 		}
 
 		if payout.PayoutAmount > 0 {
-			if err := services.CreditBalance(ctx, payout.UserEmail, payout.PayoutAmount, payout.QuoteCurrency); err != nil {
-				log.Printf("[Settlement] CRITICAL: failed to credit %.2f to %s for payout %s: %v",
-					payout.PayoutAmount, payout.UserEmail, payout.ID, err)
-				continue
-			}
 			winCount++
 			totalPayout += payout.PayoutAmount
-
 			GetOrderbookHub().BroadcastToUser(payout.UserEmail, OrderbookUpdate{
 				MarketID: payout.MarketID,
 				Type:     "PAYOUT",
@@ -219,27 +204,18 @@ func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float
 			loseCount++
 		}
 
-		now := time.Now()
-		if _, err := db.Client.Collection(settlementsCollection).Doc(payout.ID).Update(ctx, []firestore.Update{
-			{Path: "processed", Value: true},
-			{Path: "processed_at", Value: now},
-		}); err != nil {
+		if err := db.MarkPayoutProcessed(ctx, payout.ID); err != nil {
 			log.Printf("[Settlement] Warning: failed to mark payout %s as processed: %v", payout.ID, err)
 		}
 	}
-
 	return totalPayout, winCount, loseCount, nil
 }
 
-// RefundOpenOrders cancels all open/partially-filled orders for a market
-// and unlocks their reserved funds. Safe to call multiple times — CancelOrder
-// is a no-op on already-cancelled orders.
 func RefundOpenOrders(ctx context.Context, marketID string) (int, error) {
 	openOrders, err := GetOpenOrdersForMarket(ctx, marketID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch open orders for market %s: %w", marketID, err)
 	}
-
 	refundedCount := 0
 	for _, order := range openOrders {
 		if err := CancelOrder(ctx, order.ID, order.UserEmail); err != nil {
@@ -249,35 +225,6 @@ func RefundOpenOrders(ctx context.Context, marketID string) (int, error) {
 		}
 		refundedCount++
 	}
-
 	log.Printf("[Settlement] Refunded %d open orders for market %s", refundedCount, marketID)
 	return refundedCount, nil
-}
-
-func getExistingPayout(ctx context.Context, marketID, positionID string) (*Payout, error) {
-	iter := db.Client.Collection(settlementsCollection).
-		Where("market_id", "==", marketID).
-		Where("position_id", "==", positionID).
-		Limit(1).
-		Documents(ctx)
-
-	doc, err := iter.Next()
-	if err != nil {
-		return nil, nil
-	}
-
-	var payout Payout
-	if err := doc.DataTo(&payout); err != nil {
-		return nil, fmt.Errorf("failed to deserialize payout: %w", err)
-	}
-	return &payout, nil
-}
-
-// outcomeFromPayout reconstructs the market outcome from whether the payout
-// was non-zero. Used when re-processing already-calculated payouts.
-func outcomeFromPayout(p *Payout) models.MarketOutcome {
-	if p.PayoutAmount > 0 {
-		return models.OutcomeYes
-	}
-	return models.OutcomeNo
 }

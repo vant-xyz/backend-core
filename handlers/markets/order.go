@@ -207,3 +207,7 @@ func GetUserPositions(c *gin.Context) {
 		"count":     len(positions),
 	})
 }
+
+func HandleOrderbookWS(c *gin.Context) {
+	marketsvc.HandleOrderbookWS(c)
+}

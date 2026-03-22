@@ -164,3 +164,45 @@ func SyncMarket(c *gin.Context) {
 		"market":  market,
 	})
 }
+
+// GetMarketOnchain is the OVM (Onchain Verifiable Markets) endpoint.
+// Returns the raw onchain state of a market directly from Solana alongside
+// the Postgres record. Users can cross-reference with the tx hash on any
+// Solana explorer for full transparency.
+func GetMarketOnchain(c *gin.Context) {
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	dbMarket, err := marketsvc.GetMarketByID(c.Request.Context(), marketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Market not found"})
+		return
+	}
+
+	onchain, err := marketsvc.GetMarketOnchainData(marketID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch onchain data: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"market":  dbMarket,
+		"onchain": onchain,
+		"explorer_urls": gin.H{
+			"creation":   "https://explorer.solana.com/tx/" + dbMarket.CreationTxHash + "?cluster=devnet",
+			"settlement": settlementExplorerURL(dbMarket.SettlementTxHash),
+			"account":    "https://explorer.solana.com/address/" + dbMarket.MarketPDA + "?cluster=devnet",
+		},
+	})
+}
+
+func settlementExplorerURL(txHash string) string {
+	if txHash == "" {
+		return ""
+	}
+	return "https://explorer.solana.com/tx/" + txHash + "?cluster=devnet"
+}

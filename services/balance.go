@@ -6,7 +6,6 @@ import (
 
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
-	"google.golang.org/api/iterator"
 )
 
 const lockedBalanceField = "locked_balance"
@@ -204,21 +203,4 @@ func GetUserBalanceSummary(ctx context.Context, userEmail string, currency strin
 	locked = balance.LockedBalance
 	total = available + locked
 	return available, locked, total, nil
-}
-
-// GetBalanceDocRef returns the Firestore document reference for a user's balance.
-// Used internally by RunBalanceTransaction.
-func getBalanceDocRef(ctx context.Context, userEmail string) (string, error) {
-	iter := db.Client.Collection("balances").
-		Where("email", "==", userEmail).
-		Limit(1).
-		Documents(ctx)
-	doc, err := iter.Next()
-	if err == iterator.Done {
-		return "", fmt.Errorf("balance not found for %s", userEmail)
-	}
-	if err != nil {
-		return "", err
-	}
-	return doc.Ref.ID, nil
 }

@@ -11,7 +11,6 @@ import (
 
 	"github.com/gagliardetto/solana-go"
 	computebudget "github.com/gagliardetto/solana-go/programs/compute-budget"
-	ed25519program "github.com/gagliardetto/solana-go/programs/ed25519"
 	"github.com/gagliardetto/solana-go/rpc"
 	confirm "github.com/gagliardetto/solana-go/rpc/sendAndConfirmTransaction"
 	"github.com/gagliardetto/solana-go/rpc/ws"
@@ -153,21 +152,54 @@ func sendAndConfirm(
 	return sig.String(), nil
 }
 
-// buildEd25519VerifyInstruction creates the Ed25519Program verify instruction.
-// The contract's verify_settlement_signature_via_sysvar reads the instructions
-// sysvar and expects this instruction to precede the settle instruction in the
-// same transaction.
+// buildEd25519VerifyInstruction constructs the Ed25519Program verify instruction
+// manually by packing the instruction data according to the Solana Ed25519
+// native program spec:
+//
+//	u16 num_signatures
+//	per signature:
+//	  u16 signature_offset
+//	  u16 signature_instruction_index (0xFFFF = current)
+//	  u16 public_key_offset
+//	  u16 public_key_instruction_index (0xFFFF = current)
+//	  u16 message_data_offset
+//	  u16 message_data_size
+//	  u16 message_instruction_index (0xFFFF = current)
+//	followed by: signature (64 bytes) | pubkey (32 bytes) | message
 func buildEd25519VerifyInstruction(pubKey solana.PublicKey, message []byte, sig []byte) (solana.Instruction, error) {
-	var sigArr [64]byte
-	copy(sigArr[:], sig)
-	var pubArr [32]byte
-	copy(pubArr[:], pubKey[:])
-
-	ix, err := ed25519program.NewEd25519Instruction(pubArr, message, sigArr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build ed25519 verify instruction: %w", err)
+	if len(sig) != 64 {
+		return nil, fmt.Errorf("signature must be 64 bytes, got %d", len(sig))
 	}
-	return ix, nil
+
+	const headerSize = 2 + 14
+	sigOffset := uint16(headerSize)
+	pubKeyOffset := sigOffset + 64
+	msgOffset := pubKeyOffset + 32
+	msgSize := uint16(len(message))
+	currentIx := uint16(0xFFFF)
+
+	data := make([]byte, int(msgOffset)+len(message))
+
+	binary.LittleEndian.PutUint16(data[0:], 1)
+	binary.LittleEndian.PutUint16(data[2:], sigOffset)
+	binary.LittleEndian.PutUint16(data[4:], currentIx)
+	binary.LittleEndian.PutUint16(data[6:], pubKeyOffset)
+	binary.LittleEndian.PutUint16(data[8:], currentIx)
+	binary.LittleEndian.PutUint16(data[10:], msgOffset)
+	binary.LittleEndian.PutUint16(data[12:], msgSize)
+	binary.LittleEndian.PutUint16(data[14:], currentIx)
+
+	copy(data[sigOffset:], sig)
+	copy(data[pubKeyOffset:], pubKey[:])
+	copy(data[msgOffset:], message)
+
+	ed25519ProgramID := solana.MustPublicKeyFromBase58("Ed25519SigVerify111111111111111111111111111")
+
+	return solana.NewInstruction(
+		ed25519ProgramID,
+		solana.AccountMetaSlice{},
+		data,
+	), nil
 }
 
 func SignSettlementMessage(message string) ([]byte, error) {

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -8,8 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/vant-xyz/backend-code/db"
+	"github.com/vant-xyz/backend-code/models"
 )
 
 type Client struct {
@@ -25,21 +28,17 @@ var upgrader = websocket.Upgrader{
 			"https://vant.davidnzube.xyz",
 			"http://localhost:3000",
 		}
-		
 		for _, allowed := range allowedOrigins {
 			if origin == allowed {
 				return true
 			}
 		}
-		
 		if origin == "" {
 			return true
 		}
-
-		if strings.HasPrefix(origin, "http://localhost:3000") {
+		if strings.HasPrefix(origin, "http://localhost:") {
 			return true
 		}
-
 		return false
 	},
 }
@@ -96,6 +95,9 @@ func (h *Hub) Run() {
 	}
 }
 
+// BroadcastToUser sends a typed message to all connections for a specific user.
+// For balance updates, use BroadcastBalanceUpdate instead — it fetches and
+// sends the full balance object so the frontend doesn't need to re-fetch.
 func (h *Hub) BroadcastToUser(email, messageType string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -106,8 +108,40 @@ func (h *Hub) BroadcastToUser(email, messageType string) {
 	}
 }
 
+// BroadcastBalanceUpdate fetches the latest balance for a user and pushes
+// the full balance object over the WebSocket connection. The frontend receives
+// a typed message and can update its state without an additional REST call.
+func (h *Hub) BroadcastBalanceUpdate(email string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	balance, err := db.GetBalanceByEmail(ctx, email)
+	if err != nil {
+		log.Printf("[WS] Failed to fetch balance for broadcast to %s: %v", email, err)
+		h.BroadcastToUser(email, "BALANCE_UPDATE")
+		return
+	}
+
+	realNaira, demoNaira := ResolveNairaBalances(balance)
+	balance.TotalNaira = realNaira
+	balance.TotalDemoNaira = demoNaira
+
+	payload := gin.H{
+		"type":    "BALANCE_UPDATE",
+		"balance": balance,
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if client.email == email {
+			client.conn.WriteJSON(payload)
+		}
+	}
+}
+
 var (
-	PriceHub    *Hub
+	PriceHub     *Hub
 	latestPrices = make(map[string]PriceData)
 	priceMu      sync.RWMutex
 )
@@ -126,13 +160,13 @@ func StartPricePoller() {
 					log.Printf("Price Poller Warning: Could not fetch %s: %v", symbol, err)
 					continue
 				}
-				
+
 				data := PriceData{
 					Symbol: symbol,
 					Price:  price,
 					Time:   time.Now().Unix(),
 				}
-				
+
 				priceMu.Lock()
 				latestPrices[symbol] = data
 				priceMu.Unlock()
@@ -147,7 +181,7 @@ func StartPricePoller() {
 func GetLatestPrices() map[string]PriceData {
 	priceMu.RLock()
 	defer priceMu.RUnlock()
-	
+
 	copyMap := make(map[string]PriceData)
 	for k, v := range latestPrices {
 		copyMap[k] = v
@@ -185,6 +219,39 @@ func HandlePriceWS(w http.ResponseWriter, r *http.Request, email string) {
 		log.Print("upgrade:", err)
 		return
 	}
+
+	// Send current prices immediately on connect so frontend doesn't wait 5s
+	prices := GetLatestPrices()
+	for _, p := range prices {
+		conn.WriteJSON(p)
+	}
+
 	client := &Client{conn: conn, email: email}
 	PriceHub.register <- client
+}
+
+// SendBalanceUpdateToUser is called from handlers after any balance-mutating
+// operation (sell, fund, order fill, payout). It triggers a full balance push
+// over the user's active WebSocket connection.
+func SendBalanceUpdateToUser(email string) {
+	if PriceHub == nil {
+		return
+	}
+	go PriceHub.BroadcastBalanceUpdate(email)
+}
+
+// WS message types sent to the frontend:
+//
+//	PriceData          — live asset price update every 5 seconds
+//	BALANCE_UPDATE     — full balance object after any balance mutation
+//	ORDER_UPDATE       — order status changed (filled, cancelled)
+//	POSITION_UPDATE    — position created or settled
+//
+// Frontend should switch on the "type" field. PriceData has no "type" field —
+// it has "symbol", "price", "time" instead.
+
+// ResolveNairaBalancesExported is the exported version used by the WS broadcast.
+// Delegates to the existing currency service function.
+func ResolveNairaBalancesExported(balance *models.Balance) (float64, float64) {
+	return ResolveNairaBalances(balance)
 }

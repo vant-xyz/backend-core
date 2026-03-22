@@ -9,7 +9,6 @@ import (
 
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
-	"google.golang.org/api/iterator"
 )
 
 const PRODUCTION = false
@@ -17,21 +16,21 @@ const PRODUCTION = false
 var cappmLog = log.New(os.Stdout, "[CAPPM-SERVICE] ", log.Ldate|log.Ltime|log.Lmicroseconds)
 
 type assetDurationConfig struct {
-	Asset            string
-	DataProvider     string
-	Durations        []durationConfig
+	Asset        string
+	DataProvider string
+	Durations    []durationConfig
 }
 
 type durationConfig struct {
-	Seconds                 uint64
-	Label                   string
+	Seconds                  uint64
+	Label                    string
 	FallbackVolatilityFactor float64
 }
 
 var devAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "BTC",
-		DataProvider: "Coinbase",
+		DataProvider: "coinbase",
 		Durations: []durationConfig{
 			{Seconds: 180, Label: "3min", FallbackVolatilityFactor: 0.004},
 			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
@@ -42,7 +41,7 @@ var devAssetConfigs = []assetDurationConfig{
 var prodAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "BTC",
-		DataProvider: "Coinbase",
+		DataProvider: "coinbase",
 		Durations: []durationConfig{
 			{Seconds: 180, Label: "3min", FallbackVolatilityFactor: 0.004},
 			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
@@ -52,7 +51,7 @@ var prodAssetConfigs = []assetDurationConfig{
 	},
 	{
 		Asset:        "ETH",
-		DataProvider: "Coinbase",
+		DataProvider: "coinbase",
 		Durations: []durationConfig{
 			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
 			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
@@ -60,7 +59,7 @@ var prodAssetConfigs = []assetDurationConfig{
 	},
 	{
 		Asset:        "SOL",
-		DataProvider: "Coinbase",
+		DataProvider: "coinbase",
 		Durations: []durationConfig{
 			{Seconds: 1800, Label: "30min", FallbackVolatilityFactor: 0.015},
 			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
@@ -78,14 +77,11 @@ func activeAssetConfigs() []assetDurationConfig {
 
 func StartCAPPMService() {
 	configs := activeAssetConfigs()
-
 	total := 0
 	for _, a := range configs {
 		total += len(a.Durations)
 	}
-
 	cappmLog.Printf("Starting — PRODUCTION=%v, loops=%d", PRODUCTION, total)
-
 	for _, assetCfg := range configs {
 		for _, dur := range assetCfg.Durations {
 			go runCappmLoop(assetCfg, dur)
@@ -99,7 +95,7 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		existing, err := findActiveCappmMarket(ctx, asset.Asset, dur.Seconds)
+		existing, err := db.FindActiveCappmMarket(ctx, asset.Asset, dur.Seconds)
 		cancel()
 
 		if err != nil {
@@ -109,10 +105,16 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 		}
 
 		if existing != nil {
-			cappmLog.Printf("[%s] Active market found: id=%s sleeping until %s",
-				loopID, existing.ID, existing.EndTimeUTC.Format(time.RFC3339))
-			sleepUntilTime(existing.EndTimeUTC)
-			cappmLog.Printf("[%s] Market expired, creating next", loopID)
+			if time.Now().Before(existing.EndTimeUTC) {
+				cappmLog.Printf("[%s] Active market found: id=%s sleeping until %s",
+					loopID, existing.ID, existing.EndTimeUTC.Format(time.RFC3339))
+				sleepUntilTime(existing.EndTimeUTC)
+				cappmLog.Printf("[%s] Market expired, creating next", loopID)
+			} else {
+				cappmLog.Printf("[%s] Stale expired market found: id=%s — settling",
+					loopID, existing.ID)
+				settleWithRetry(loopID, existing.ID, asset.Asset)
+			}
 			continue
 		}
 
@@ -134,6 +136,63 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 	}
 }
 
+// settleWithRetry retries settlement indefinitely with capped exponential backoff.
+// It never writes a fake outcome. The market stays in limbo until the network
+// recovers and settlement succeeds. On a production VPS this resolves in seconds.
+func settleWithRetry(loopID, marketID, asset string) {
+	attempt := 0
+	for {
+		attempt++
+
+		if attempt > 1 {
+			raw := attempt * attempt * 10
+			if raw > 600 {
+				raw = 600
+			}
+			backoff := time.Duration(raw) * time.Second
+			cappmLog.Printf("[%s] Settlement retry %d for %s — waiting %s",
+				loopID, attempt, marketID, backoff)
+			time.Sleep(backoff)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+
+		market, err := db.GetMarketByID(ctx, marketID)
+		if err != nil {
+			cancel()
+			cappmLog.Printf("[%s] Failed to load market %s (attempt %d): %v",
+				loopID, marketID, attempt, err)
+			continue
+		}
+
+		if market.Status == models.MarketStatusResolved {
+			cancel()
+			cappmLog.Printf("[%s] Market %s already resolved externally", loopID, marketID)
+			return
+		}
+
+		endPriceCents, err := GetHistoricalPrice(asset, market.EndTimeUTC)
+		if err != nil {
+			cancel()
+			cappmLog.Printf("[%s] Price fetch failed for %s (attempt %d): %v",
+				loopID, marketID, attempt, err)
+			continue
+		}
+
+		err = SettleCAPPM(ctx, marketID, endPriceCents)
+		cancel()
+
+		if err != nil {
+			cappmLog.Printf("[%s] Settlement tx failed for %s (attempt %d): %v",
+				loopID, marketID, attempt, err)
+			continue
+		}
+
+		cappmLog.Printf("[%s] Settlement succeeded for %s on attempt %d", loopID, marketID, attempt)
+		return
+	}
+}
+
 func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Market, error) {
 	currentPriceCents, err := GetCurrentPrice(asset.Asset)
 	if err != nil {
@@ -142,7 +201,7 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 
 	momentumPriceCents, err := GetMomentumPrice(asset.Asset)
 	if err != nil {
-		cappmLog.Printf("[%s-%s] Momentum price unavailable, defaulting to Above: %v",
+		cappmLog.Printf("[%s-%s] Momentum price unavailable, defaulting direction to Above: %v",
 			asset.Asset, dur.Label, err)
 		momentumPriceCents = currentPriceCents
 	}
@@ -154,7 +213,6 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 		currentPriceCents, momentumPriceCents)
 
 	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, volatilityFactor)
-
 	startTime := time.Now().UTC().Add(5 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -178,12 +236,10 @@ func calculateTarget(currentCents, momentumCents uint64, volatilityFactor float6
 	if momentumCents < currentCents {
 		direction = models.DirectionBelow
 	}
-
 	offset := uint64(float64(currentCents) * volatilityFactor)
 	if offset == 0 {
 		offset = 1
 	}
-
 	var targetCents uint64
 	if direction == models.DirectionAbove {
 		targetCents = currentCents + offset
@@ -194,7 +250,6 @@ func calculateTarget(currentCents, momentumCents uint64, volatilityFactor float6
 			targetCents = 1
 		}
 	}
-
 	return direction, targetCents
 }
 
@@ -219,30 +274,6 @@ func buildMarketDescription(asset string, direction models.MarketDirection, targ
 		"Resolves YES if %s spot price is %s $%d.%02d at expiry (%s from creation). Price sourced from Coinbase.",
 		asset, dirWord, dollars, cents, durationLabel,
 	)
-}
-
-func findActiveCappmMarket(ctx context.Context, asset string, durationSeconds uint64) (*models.Market, error) {
-	iter := db.Client.Collection(marketsCollection).
-		Where("market_type", "==", string(models.MarketTypeCAPPM)).
-		Where("status", "==", string(models.MarketStatusActive)).
-		Where("asset", "==", asset).
-		Where("duration_seconds", "==", durationSeconds).
-		Limit(1).
-		Documents(ctx)
-
-	doc, err := iter.Next()
-	if err == iterator.Done {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("firestore query failed: %w", err)
-	}
-
-	var market models.Market
-	if err := doc.DataTo(&market); err != nil {
-		return nil, fmt.Errorf("failed to deserialize market: %w", err)
-	}
-	return &market, nil
 }
 
 func sleepUntilTime(t time.Time) {

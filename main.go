@@ -17,7 +17,12 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	db.Init("vant-a2479", "serviceAccount.json")
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required")
+	}
+	db.Init(databaseURL)
+	defer db.Close()
 
 	services.StartPricePoller()
 	marketsvc.StartCAPPMService()
@@ -34,8 +39,10 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// ── Public ────────────────────────────────────────────────────────────────
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
+
 	r.GET("/prices", handlers.GetPrices)
 	r.GET("/prices/vant", handlers.GetVantPrices)
 	r.GET("/prices/vant/:asset", handlers.GetAssetPrice)
@@ -47,11 +54,20 @@ func main() {
 	r.GET("/internal/wallets", handlers.GetInternalWallets)
 	r.POST("/internal/deposit", handlers.HandleInternalDeposit)
 
+	// ── Markets — public ──────────────────────────────────────────────────────
+	// GET /markets?type=CAPPM&status=active   → crypto tab feed
+	// GET /markets?type=GEM&status=active     → general tab feed
+	// GET /markets?status=resolved            → history feed
 	r.GET("/markets", handlersmarkets.GetMarkets)
 	r.GET("/markets/:id", handlersmarkets.GetMarket)
 	r.GET("/markets/:id/orderbook", handlersmarkets.GetOrderbook)
 	r.GET("/markets/:id/orderbook/depth", handlersmarkets.GetOrderbookDepth)
 
+	// OVM — Onchain Verifiable Markets
+	// Returns Postgres record + raw Solana account state + explorer URLs
+	r.GET("/markets/:id/onchain", handlersmarkets.GetMarketOnchain)
+
+	// ── Authenticated ─────────────────────────────────────────────────────────
 	auth := r.Group("/")
 	auth.Use(handlers.AuthMiddleware())
 	{
@@ -68,11 +84,16 @@ func main() {
 		auth.POST("/transactions/email", handlers.SendTransactionEmail)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
 
+		// Orders & positions
 		auth.POST("/orders", handlersmarkets.PlaceOrder)
 		auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
 		auth.GET("/orders", handlersmarkets.GetUserOrders)
 		auth.GET("/positions", handlersmarkets.GetUserPositions)
 
+		// WebSockets
+		// /ws             → live price feed (BTC, ETH, SOL, USD-NGN every 5s)
+		//                   also pushes BALANCE_UPDATE with full balance object
+		// /ws/markets/:id/orderbook → live orderbook depth + fills for a market
 		auth.GET("/ws", func(c *gin.Context) {
 			email, _ := c.Get("email")
 			services.HandlePriceWS(c.Writer, c.Request, email.(string))
@@ -80,6 +101,7 @@ func main() {
 		auth.GET("/ws/markets/:id/orderbook", handlersmarkets.HandleOrderbookWS)
 	}
 
+	// ── Admin ─────────────────────────────────────────────────────────────────
 	admin := r.Group("/admin")
 	admin.Use(handlers.AdminAuthMiddleware())
 	{
