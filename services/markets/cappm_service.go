@@ -76,15 +76,27 @@ func activeAssetConfigs() []assetDurationConfig {
 }
 
 func StartCAPPMService() {
+	enableAutoCurated := os.Getenv("ENABLE_AUTO_CURATED_CAPPMS") == "true"
+	
 	configs := activeAssetConfigs()
 	total := 0
 	for _, a := range configs {
 		total += len(a.Durations)
 	}
-	cappmLog.Printf("Starting — PRODUCTION=%v, loops=%d", PRODUCTION, total)
-	for _, assetCfg := range configs {
-		for _, dur := range assetCfg.Durations {
-			go runCappmLoop(assetCfg, dur)
+	
+	if enableAutoCurated {
+		cappmLog.Printf("Starting AUTO-CREATION mode — PRODUCTION=%v, loops=%d", PRODUCTION, total)
+		for _, assetCfg := range configs {
+			for _, dur := range assetCfg.Durations {
+				go runCappmLoop(assetCfg, dur)
+			}
+		}
+	} else {
+		cappmLog.Printf("Starting SETTLEMENT-ONLY mode — PRODUCTION=%v, will settle existing markets but not create new ones", PRODUCTION)
+		for _, assetCfg := range configs {
+			for _, dur := range assetCfg.Durations {
+				go runCappmSettlementLoop(assetCfg, dur)
+			}
 		}
 	}
 }
@@ -279,5 +291,44 @@ func buildMarketDescription(asset string, direction models.MarketDirection, targ
 func sleepUntilTime(t time.Time) {
 	if delay := time.Until(t); delay > 0 {
 		time.Sleep(delay)
+	}
+}
+
+// runCappmSettlementLoop only settles existing markets, doesn't create new ones.
+// This is used when ENABLE_AUTO_CURATED_CAPPMS=false.
+func runCappmSettlementLoop(asset assetDurationConfig, dur durationConfig) {
+	loopID := fmt.Sprintf("%s-%s-SETTLE", asset.Asset, dur.Label)
+	cappmLog.Printf("[%s] Settlement-only loop started", loopID)
+
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		existing, err := db.FindActiveCappmMarket(ctx, asset.Asset, dur.Seconds)
+		cancel()
+
+		if err != nil {
+			cappmLog.Printf("[%s] Error querying active market: %v — retrying in 5m", loopID, err)
+			time.Sleep(5 * time.Minute)
+			continue
+		}
+
+		if existing != nil {
+			if time.Now().Before(existing.EndTimeUTC) {
+				cappmLog.Printf("[%s] Active market found: id=%s, monitoring until %s",
+					loopID, existing.ID, existing.EndTimeUTC.Format(time.RFC3339))
+				sleepUntilTime(existing.EndTimeUTC)
+				cappmLog.Printf("[%s] Market expired, settling", loopID)
+			} else {
+				cappmLog.Printf("[%s] Market already expired: id=%s, settling now",
+					loopID, existing.ID)
+			}
+			
+			settleWithRetry(loopID, existing.ID, asset.Asset)
+			cappmLog.Printf("[%s] Settlement complete, sleeping 5m", loopID)
+			time.Sleep(5 * time.Minute)
+			continue
+		}
+
+		cappmLog.Printf("[%s] No active market found, sleeping 5m", loopID)
+		time.Sleep(5 * time.Minute)
 	}
 }
