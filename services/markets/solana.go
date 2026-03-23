@@ -700,3 +700,48 @@ func unpackOnchainMarket(marketID string, raw []byte) (*OnchainMarket, error) {
 
 	return m, nil
 }
+
+func GetAllMarketsOnchain(ctx context.Context, status string) ([]OnchainMarket, error) {
+	programID, err := getProgramID()
+	if err != nil {
+		return nil, err
+	}
+
+	rpcURLs := getFallbackRPCURLs()
+	var lastErr error
+
+	for _, rpcURL := range rpcURLs {
+		client := rpc.New(rpcURL)
+
+		accounts, err := client.GetProgramAccounts(
+			ctx,
+			programID,
+		)
+
+		if err != nil {
+			lastErr = fmt.Errorf("RPC %s GetProgramAccounts failed: %w", rpcURL, err)
+			continue
+		}
+
+		var markets []OnchainMarket
+		for _, account := range accounts {
+			market, err := unpackOnchainMarket(account.Pubkey.String(), account.Account.Data.GetBinary())
+			if err != nil {
+				continue
+			}
+
+			if status == "active" && market.IsResolved {
+				continue
+			}
+			if status == "resolved" && !market.IsResolved {
+				continue
+			}
+
+			markets = append(markets, *market)
+		}
+
+		return markets, nil
+	}
+
+	return nil, fmt.Errorf("all RPC endpoints failed: %w", lastErr)
+}

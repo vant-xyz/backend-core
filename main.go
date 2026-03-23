@@ -66,6 +66,7 @@ func main() {
 	// OVM — Onchain Verifiable Markets
 	// Returns Postgres record + raw Solana account state + explorer URLs
 	r.GET("/markets/:id/onchain", handlersmarkets.GetMarketOnchain)
+	r.GET("/markets/onchain", handlersmarkets.GetMarketsOnchain)
 
 	// ── Authenticated ─────────────────────────────────────────────────────────
 	auth := r.Group("/")

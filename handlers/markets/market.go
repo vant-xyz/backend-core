@@ -200,6 +200,26 @@ func GetMarketOnchain(c *gin.Context) {
 	})
 }
 
+func GetMarketsOnchain(c *gin.Context) {
+	status := c.Query("status")
+
+	markets, err := marketsvc.GetAllMarketsOnchain(c.Request.Context(), status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch onchain markets: " + err.Error()})
+		return
+	}
+
+	if markets == nil {
+		markets = []marketsvc.OnchainMarket{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"markets": markets,
+		"count":   len(markets),
+	})
+}
+
 func settlementExplorerURL(txHash string) string {
 	if txHash == "" {
 		return ""
