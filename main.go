@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,18 @@ import (
 	"github.com/vant-xyz/backend-code/services"
 	marketsvc "github.com/vant-xyz/backend-code/services/markets"
 )
+
+func splitByComma(s string) []string {
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
 
 func main() {
 	_ = godotenv.Load()
@@ -31,8 +44,17 @@ func main() {
 
 	r := gin.Default()
 
+	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = "https://vantic.xyz,https://indexer-core.vantic.xyz,https://vas-api.vantic.xyz,http://localhost:8080,http://localhost:3000"
+	}
+	origins := []string{}
+	for _, o := range splitByComma(allowedOrigins) {
+		origins = append(origins, o)
+	}
+
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     origins,
 		AllowMethods:     []string{"POST", "OPTIONS", "GET", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Admin-Key"},
 		ExposeHeaders:    []string{"Content-Length"},
