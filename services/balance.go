@@ -147,13 +147,12 @@ func GetTotalBalance(ctx context.Context, userEmail string, currency string) (fl
 	return available + balance.LockedBalance, nil
 }
 
-// currencyToField maps a quote currency code to its Firestore balance field.
-// Extend this map as new currencies are supported.
+// currencyToField maps a quote currency code to its balance DB field.
 func currencyToField(currency string) string {
 	switch currency {
-	case "NGN":
+	case "USD", "NGN":
 		return "naira"
-	case "NGN_DEMO":
+	case "USD_DEMO", "NGN_DEMO":
 		return "demo_naira"
 	default:
 		return ""

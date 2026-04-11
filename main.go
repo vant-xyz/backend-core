@@ -114,7 +114,7 @@ func main() {
 		auth.GET("/positions", handlersmarkets.GetUserPositions)
 
 		// WebSockets
-		// /ws             → live price feed (BTC, ETH, SOL, USD-NGN every 5s)
+		// /ws             → live price feed (BTC, ETH, SOL every 5s)
 		//                   also pushes BALANCE_UPDATE with full balance object
 		// /ws/markets/:id/orderbook → live orderbook depth + fills for a market
 		auth.GET("/ws", func(c *gin.Context) {

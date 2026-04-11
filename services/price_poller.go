@@ -149,7 +149,7 @@ func StartPricePoller() {
 	PriceHub = NewHub()
 	go PriceHub.Run()
 
-	symbols := []string{"BTC-USD", "ETH-USD", "SOL-USD", "USD-NGN"}
+	symbols := []string{"BTC-USD", "ETH-USD", "SOL-USD"}
 
 	go func() {
 		for {

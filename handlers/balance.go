@@ -180,14 +180,14 @@ func SellAsset(c *gin.Context) {
 		}
 
 		if err = db.UpdateBalance(bgCtx, email, nairaField, receiveNaira); err != nil {
-			log.Printf("[Sell] CRITICAL: failed to credit naira after successful on-chain move for %s: %v", email, err)
+			log.Printf("[Sell] CRITICAL: failed to credit USD after successful on-chain move for %s: %v", email, err)
 		}
 
 		transaction := models.Transaction{
 			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
 			UserEmail: email,
 			Amount:    receiveNaira,
-			Currency:  "NGN",
+			Currency:  "USD",
 			Nature:    req.Nature,
 			Type:      "sell",
 			Status:    "completed",
@@ -223,8 +223,8 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	if req.AmountNaira > 20000 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Max request is 20,000 NGN"})
+	if req.AmountNaira > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Max request is $200 USD"})
 		return
 	}
 
@@ -234,9 +234,9 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	_, currentDemoNaira := services.ResolveNairaBalances(balance)
-	if currentDemoNaira >= 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "You must have less than 100 NGN to request funds"})
+	_, currentDemoUSD := services.ResolveUSDBalances(balance)
+	if currentDemoUSD >= 1.0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "You must have less than $1.00 to request demo funds"})
 		return
 	}
 
@@ -267,7 +267,7 @@ func FundDemoAccount(c *gin.Context) {
 		ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
 		UserEmail: email,
 		Amount:    req.AmountNaira,
-		Currency:  "NGN",
+		Currency:  "USD",
 		Nature:    "demo",
 		Type:      "faucet",
 		Status:    "completed",
@@ -287,7 +287,7 @@ func FundDemoAccount(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": fmt.Sprintf("Funded %f SOL (~%.2f NGN)", amountSol, req.AmountNaira),
+		"message": fmt.Sprintf("Funded %f SOL (~$%.2f USD)", amountSol, req.AmountNaira),
 		"tx_hash": sig,
 	})
 }

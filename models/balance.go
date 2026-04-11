@@ -3,8 +3,8 @@ package models
 type Balance struct {
 	ID             string  `json:"id" firestore:"id"`
 	Email          string  `json:"email" firestore:"email"`
-	TotalNaira     float64 `json:"total_naira" firestore:"-"`
-	TotalDemoNaira float64 `json:"total_demo_naira" firestore:"-"`
+	TotalNaira     float64 `json:"total_usd" firestore:"-"`
+	TotalDemoNaira float64 `json:"total_demo_usd" firestore:"-"`
 	USDCSol        float64 `json:"usdc_sol" firestore:"usdc_sol"`
 	USDCBase       float64 `json:"usdc_base" firestore:"usdc_base"`
 	USDTSol        float64 `json:"usdt_sol" firestore:"usdt_sol"`

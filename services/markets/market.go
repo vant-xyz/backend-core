@@ -11,7 +11,7 @@ import (
 	"github.com/vant-xyz/backend-code/utils"
 )
 
-const defaultCurrency = "NGN"
+const defaultCurrency = "USD"
 
 type CreateCAPPMInput struct {
 	Title           string
