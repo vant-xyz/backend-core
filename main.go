@@ -36,6 +36,7 @@ func main() {
 	}
 	db.Init(databaseURL)
 	defer db.Close()
+	db.InitRedis()
 
 	services.StartPricePoller()
 	marketsvc.StartCAPPMService()

@@ -337,17 +337,19 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 	if taker.RemainingQty == 0 {
 		takerStatus = models.OrderStatusFilled
 	}
-	if err := db.UpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
-		log.Printf("[Engine] Failed to persist taker fill %s: %v", taker.ID, err)
+	if err := db.RedisUpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
+		log.Printf("[Engine] Redis fill update failed for taker %s: %v", taker.ID, err)
 	}
+	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
 
 	makerStatus := models.OrderStatusPartiallyFilled
 	if maker.RemainingQty == 0 {
 		makerStatus = models.OrderStatusFilled
 	}
-	if err := db.UpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
-		log.Printf("[Engine] Failed to persist maker fill %s: %v", maker.ID, err)
+	if err := db.RedisUpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
+		log.Printf("[Engine] Redis fill update failed for maker %s: %v", maker.ID, err)
 	}
+	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
 
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*price); err != nil {
 		log.Printf("[Engine] Failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
@@ -388,9 +390,10 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 func persistOrderFill(order *models.Order) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := db.UpdateOrderFill(ctx, order.ID, order.FilledQty, order.RemainingQty, order.Status); err != nil {
-		log.Printf("[Engine] Failed to persist order status %s: %v", order.ID, err)
+	if err := db.RedisUpdateOrderFill(ctx, order.ID, order.FilledQty, order.RemainingQty, order.Status); err != nil {
+		log.Printf("[Engine] Redis order fill update failed %s: %v", order.ID, err)
 	}
+	db.AsyncSyncFillToPG(order.ID, order.FilledQty, order.RemainingQty, order.Status)
 }
 
 func cancelOrderAsync(orderID, userEmail string) {
