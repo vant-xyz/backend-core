@@ -90,13 +90,17 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 		ExpiresAt:     input.ExpiresAt,
 	}
 
-	if err := db.SaveOrder(ctx, order); err != nil {
+	if err := db.RedisStoreOrder(ctx, order); err != nil {
 		if unlockErr := services.UnlockBalance(ctx, input.UserEmail, lockedAmount, market.QuoteCurrency); unlockErr != nil {
 			log.Printf("[Orders] CRITICAL: failed to unlock balance after order save failure for %s: %v",
 				input.UserEmail, unlockErr)
 		}
 		return nil, fmt.Errorf("failed to save order: %w", err)
 	}
+
+	db.AsyncSyncOrderToPG(order, func(c context.Context, o *models.Order) error {
+		return db.SaveOrder(c, o)
+	})
 
 	GetMatchingEngine().Submit(order)
 
