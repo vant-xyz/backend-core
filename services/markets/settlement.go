@@ -200,6 +200,26 @@ func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float
 					"position_id":    payout.PositionID,
 				},
 			})
+			go func(p Payout) {
+				ppCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				wallet, err := db.GetWalletByEmail(ppCtx, p.UserEmail)
+				if err != nil || wallet.SolPublicKey == "" {
+					return
+				}
+				settlerKey, err := getSettlerKeypair()
+				if err != nil {
+					log.Printf("[MagicBlock] settler keypair unavailable for private payment: %v", err)
+					return
+				}
+				units := uint64(p.PayoutAmount * 1_000_000)
+				sig, err := SendPrivatePayment(ppCtx, settlerKey, wallet.SolPublicKey, units)
+				if err != nil {
+					log.Printf("[MagicBlock] private payment failed for %s: %v", p.UserEmail, err)
+					return
+				}
+				log.Printf("[MagicBlock] private payment sent to %s sig=%s", p.UserEmail, sig)
+			}(*payout)
 		} else {
 			loseCount++
 		}
