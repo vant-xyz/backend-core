@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -17,14 +18,17 @@ import (
 )
 
 const (
-	discriminatorCreateCAPPM = 0
-	discriminatorCreateGEM   = 1
-	discriminatorSettleCAPPM = 2
-	discriminatorSettleGEM   = 3
-	discriminatorGetMarket   = 4
+	discriminatorCreateCAPPM    = 0
+	discriminatorCreateGEM      = 1
+	discriminatorSettleCAPPM    = 2
+	discriminatorSettleGEM      = 3
+	discriminatorGetMarket      = 4
+	discriminatorDelegateMarket = 5
 
 	marketSeed     = "market"
 	settlementSeed = "settlement"
+
+	delegationProgramIDStr = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
 
 	rpcTimeout = 30 * time.Second
 )
@@ -315,6 +319,80 @@ func CreateMarketCAPPM(params CreateMarketCAPPMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
+	sig, err := sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		if _, delegateErr := DelegateMarket(params.MarketID); delegateErr != nil {
+			log.Printf("[MagicBlock] DelegateMarket failed for %s: %v", params.MarketID, delegateErr)
+		} else {
+			log.Printf("[MagicBlock] DelegateMarket OK for %s", params.MarketID)
+		}
+	}()
+	return sig, nil
+}
+
+func DelegateMarket(marketID string) (string, error) {
+	programID, err := getProgramID()
+	if err != nil {
+		return "", err
+	}
+	settlerKey, err := getSettlerKeypair()
+	if err != nil {
+		return "", err
+	}
+	delegationProgramID := solana.MustPublicKeyFromBase58(delegationProgramIDStr)
+
+	marketPDA, _, err := deriveMarketPDA(marketID)
+	if err != nil {
+		return "", err
+	}
+
+	bufferPDA, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("buffer"), marketPDA[:]},
+		programID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive buffer PDA: %w", err)
+	}
+
+	delegationRecordPDA, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("delegation"), marketPDA[:]},
+		delegationProgramID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive delegation record PDA: %w", err)
+	}
+
+	delegationMetadataPDA, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("delegation-metadata"), marketPDA[:]},
+		delegationProgramID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive delegation metadata PDA: %w", err)
+	}
+
+	marketIDBytes := []byte(marketID)
+	data := make([]byte, 1+2+len(marketIDBytes))
+	off := 0
+	writeU8(data, &off, discriminatorDelegateMarket)
+	binary.LittleEndian.PutUint16(data[off:], uint16(len(marketIDBytes)))
+	off += 2
+	copy(data[off:], marketIDBytes)
+
+	creatorPub := settlerKey.PublicKey()
+	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
+		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
+		{PublicKey: creatorPub, IsSigner: true, IsWritable: true},
+		{PublicKey: bufferPDA, IsSigner: false, IsWritable: true},
+		{PublicKey: delegationRecordPDA, IsSigner: false, IsWritable: true},
+		{PublicKey: delegationMetadataPDA, IsSigner: false, IsWritable: true},
+		{PublicKey: programID, IsSigner: false, IsWritable: false},
+		{PublicKey: delegationProgramID, IsSigner: false, IsWritable: false},
+		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
+	}, data)
+
 	return sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 }
 
@@ -365,7 +443,18 @@ func CreateMarketGEM(params CreateMarketGEMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	return sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	sig, err := sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		if _, delegateErr := DelegateMarket(params.MarketID); delegateErr != nil {
+			log.Printf("[MagicBlock] DelegateMarket failed for %s: %v", params.MarketID, delegateErr)
+		} else {
+			log.Printf("[MagicBlock] DelegateMarket OK for %s", params.MarketID)
+		}
+	}()
+	return sig, nil
 }
 
 func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
