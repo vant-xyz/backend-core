@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
@@ -36,6 +37,11 @@ func main() {
 	}
 	db.Init(databaseURL)
 	defer db.Close()
+
+	if err := db.RunMigrations(context.Background()); err != nil {
+		log.Fatalf("[Migrate] Fatal: %v", err)
+	}
+
 	db.InitRedis()
 
 	services.StartPricePoller()
