@@ -11,6 +11,29 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: vant_test
+          POSTGRES_USER: vant
+          POSTGRES_PASSWORD: vanttest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,7 +44,10 @@ jobs:
           go-version: '1.25.4'
 
       - name: Run tests
-        run: go test -v ./...
+        env:
+          DATABASE_URL: postgres://vant:vanttest@localhost:5432/vant_test?sslmode=disable
+          REDIS_URL: redis://localhost:6379
+        run: go test -count=1 -v ./...
 
   swagger:
     runs-on: ubuntu-latest
