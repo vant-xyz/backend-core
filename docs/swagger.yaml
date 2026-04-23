@@ -1,0 +1,1811 @@
+openapi: 3.0.3
+info:
+  title: Vantic API
+  description: |
+    Backend API for the Vantic prediction market platform.
+
+    ## Authentication
+    Most endpoints require a JWT Bearer token. Obtain one via `POST /auth`.
+    Pass it as: `Authorization: Bearer <token>`
+
+    ## Admin Endpoints
+    Admin routes require the `X-Admin-Key` header instead of JWT.
+
+    ## Demo Mode
+    Users can trade in demo mode with simulated balances. Demo balances are prefixed
+    with `demo_` in the balance object. Use `POST /demo/fund` to load up to $200.
+
+    ## Markets
+    - **CAPPM** — Crypto Assets Price Prediction Markets. Binary YES/NO on BTC/ETH/SOL
+      price at a future timestamp. Auto-created and auto-settled by the backend.
+    - **GEM** — General Event Markets. Any binary event. Created and settled manually via admin.
+    - Winning shares pay $1.00 USD each. Prices between $0.01–$0.99 per share.
+
+    ## WebSockets
+    - `GET /ws` — Authenticated. Pushes live BTC/ETH/SOL prices every 5s and
+      `BALANCE_UPDATE` events when user balance changes.
+    - `GET /ws/markets/:id/orderbook` — Authenticated. Streams live orderbook depth
+      and fill events for a specific market.
+
+    ## OVM — Onchain Verifiable Markets
+    Every market's creation and settlement is recorded on Solana. Users can verify
+    any settlement on-chain via the explorer URLs returned by the `/markets/:id/onchain` endpoint.
+  version: 1.0.0
+
+servers:
+  - url: https://api.vantic.xyz
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    adminKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Invalid request"
+
+    SuccessMessage:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    User:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        username:
+          type: string
+          example: "tayo_trades"
+        full_name:
+          type: string
+          example: "Tayo Adesanya"
+        vant_id:
+          type: string
+          example: "VANT_8F2K9"
+        balance_id:
+          type: string
+        socials:
+          type: array
+          items:
+            type: string
+        profile_image_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Wallet:
+      type: object
+      properties:
+        account_id:
+          type: string
+        email:
+          type: string
+        sol_public_key:
+          type: string
+          example: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+        base_public_key:
+          type: string
+          example: "0x742d35Cc6634C0532925a3b8D4C9C9C9C9C9C9C9"
+
+    Balance:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        total_usd:
+          type: number
+          description: Computed total real balance in USD
+          example: 150.50
+        total_demo_usd:
+          type: number
+          description: Computed total demo balance in USD
+          example: 200.00
+        usdc_sol:
+          type: number
+          description: USDC on Solana
+        usdc_base:
+          type: number
+          description: USDC on Base
+        usdt_sol:
+          type: number
+        usdg_sol:
+          type: number
+        sol:
+          type: number
+          description: Real SOL balance
+        eth_base:
+          type: number
+          description: ETH on Base
+        naira:
+          type: number
+          description: USD vault balance (real)
+        demo_usdc_sol:
+          type: number
+        demo_sol:
+          type: number
+        demo_naira:
+          type: number
+          description: USD vault balance (demo)
+        vusd:
+          type: number
+          description: Vantic virtual USD (used for prediction market positions)
+        locked_balance:
+          type: number
+          description: Amount locked in open limit orders
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "TX_A8F3K2"
+        user_email:
+          type: string
+        amount:
+          type: number
+          example: 50.00
+        currency:
+          type: string
+          example: "USD"
+        nature:
+          type: string
+          enum: [real, demo]
+          example: "real"
+        type:
+          type: string
+          enum: [deposit, sell, faucet, payout]
+          example: "deposit"
+        status:
+          type: string
+          enum: [completed, pending, failed]
+          example: "completed"
+        tx_hash:
+          type: string
+          description: Solana or EVM transaction hash, if applicable
+        created_at:
+          type: string
+          format: date-time
+
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "MKT_BTC_ABOVE_90K_2026042315"
+        market_type:
+          type: string
+          enum: [CAPPM, GEM]
+          example: "CAPPM"
+        status:
+          type: string
+          enum: [active, resolved]
+          example: "active"
+        quote_currency:
+          type: string
+          example: "USD"
+        title:
+          type: string
+          example: "Will BTC be above $90,000 at 3pm UTC?"
+        description:
+          type: string
+        data_provider:
+          type: string
+          example: "Coinbase"
+        creator_address:
+          type: string
+          description: Solana public key of the market creator
+        market_pda:
+          type: string
+          description: Solana Program Derived Address for this market
+        start_time_utc:
+          type: string
+          format: date-time
+        end_time_utc:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+          example: 3600
+        created_at:
+          type: string
+          format: date-time
+        creation_tx_hash:
+          type: string
+          description: Solana tx hash of market creation
+        asset:
+          type: string
+          description: CAPPM only — BTC, ETH, or SOL
+          example: "BTC"
+        direction:
+          type: string
+          description: CAPPM only
+          enum: [Above, Below]
+          example: "Above"
+        target_price:
+          type: integer
+          description: CAPPM only — target price in cents (e.g. 9000000 = $90,000)
+          example: 9000000
+        current_price:
+          type: integer
+          description: CAPPM only — current price in cents at time of query
+        outcome:
+          type: string
+          description: Resolved markets only
+          enum: [YES, NO]
+        outcome_description:
+          type: string
+        end_price:
+          type: integer
+          description: CAPPM only — price at settlement, in cents
+        settlement_tx_hash:
+          type: string
+        resolved_at:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ORD_7X2K9P"
+        user_email:
+          type: string
+        market_id:
+          type: string
+        side:
+          type: string
+          enum: [YES, NO]
+          example: "YES"
+        type:
+          type: string
+          enum: [MARKET, LIMIT]
+          example: "LIMIT"
+        price:
+          type: number
+          description: Price per share in USD. For limit orders only. Between 0.01 and 99.99.
+          example: 0.62
+        quantity:
+          type: number
+          description: Number of shares
+          example: 100
+        filled_qty:
+          type: number
+          example: 50
+        remaining_qty:
+          type: number
+          example: 50
+        status:
+          type: string
+          enum: [OPEN, PARTIALLY_FILLED, FILLED, CANCELLED]
+          example: "PARTIALLY_FILLED"
+        quote_currency:
+          type: string
+          example: "USD"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Position:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "POS_4M8R2Q"
+        user_email:
+          type: string
+        market_id:
+          type: string
+        side:
+          type: string
+          enum: [YES, NO]
+          example: "YES"
+        shares:
+          type: number
+          description: Number of shares held
+          example: 150
+        avg_entry_price:
+          type: number
+          description: Average price paid per share in USD
+          example: 0.58
+        realized_pnl:
+          type: number
+          description: Realized profit/loss in USD. Populated after settlement.
+          example: 63.00
+        payout_amount:
+          type: number
+          description: Total payout received at settlement ($1.00 per winning share)
+          example: 150.00
+        status:
+          type: string
+          enum: [ACTIVE, SETTLED]
+          example: "ACTIVE"
+        quote_currency:
+          type: string
+          example: "USD"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        settled_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrderbookLevel:
+      type: object
+      properties:
+        price:
+          type: number
+          description: Price per share in USD
+          example: 0.62
+        quantity:
+          type: number
+          description: Total shares available at this price
+          example: 250
+        orders:
+          type: integer
+          description: Number of distinct orders at this price level
+          example: 3
+
+    OrderbookSnapshot:
+      type: object
+      properties:
+        market_id:
+          type: string
+        yes_bids:
+          type: array
+          description: Orders wanting to buy YES shares, best price first
+          items:
+            $ref: '#/components/schemas/OrderbookLevel'
+        yes_asks:
+          type: array
+          description: Orders wanting to sell YES shares, lowest ask first
+          items:
+            $ref: '#/components/schemas/OrderbookLevel'
+        no_bids:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderbookLevel'
+        no_asks:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderbookLevel'
+        last_traded_price:
+          type: number
+          description: Price of the most recent fill on this market
+          example: 0.61
+        spread:
+          type: number
+          description: Difference between best YES ask and best YES bid
+          example: 0.02
+        fetched_at:
+          type: string
+          format: date-time
+
+    OnchainMarket:
+      type: object
+      description: Raw market state read directly from the Solana contract account
+      properties:
+        MarketID:
+          type: string
+        MarketType:
+          type: integer
+          description: "0 = CAPPM, 1 = GEM"
+        IsResolved:
+          type: boolean
+        Creator:
+          type: string
+          description: Solana public key
+        ApprovedSettler:
+          type: string
+          description: Solana public key of the approved settler
+        Title:
+          type: string
+        Description:
+          type: string
+        StartTimeUTC:
+          type: integer
+          description: Unix timestamp
+        EndTimeUTC:
+          type: integer
+          description: Unix timestamp
+        DurationSeconds:
+          type: integer
+        DataProvider:
+          type: string
+        CreatedAt:
+          type: integer
+          description: Unix timestamp
+        Asset:
+          type: string
+        Direction:
+          type: integer
+          nullable: true
+          description: "0 = Above, 1 = Below (CAPPM only)"
+        TargetPrice:
+          type: integer
+          nullable: true
+          description: Target price in cents (CAPPM only)
+        CurrentPrice:
+          type: integer
+          nullable: true
+        EndPrice:
+          type: integer
+          nullable: true
+        Outcome:
+          type: integer
+          nullable: true
+          description: "0 = YES, 1 = NO"
+        OutcomeDescription:
+          type: string
+
+    PriceMap:
+      type: object
+      description: Map of asset ticker to price data
+      additionalProperties:
+        type: object
+        properties:
+          price:
+            type: number
+            description: Current price in USD
+            example: 90000.00
+          change_24h:
+            type: number
+            description: 24h percentage change
+            example: 2.5
+      example:
+        BTC:
+          price: 90000.00
+          change_24h: 2.5
+        ETH:
+          price: 3200.00
+          change_24h: -1.2
+        SOL:
+          price: 185.00
+          change_24h: 5.0
+
+paths:
+  # ── Health ────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  # ── Auth ─────────────────────────────────────────────────────────────────
+
+  /auth/exists:
+    post:
+      tags: [Auth]
+      summary: Check if email is registered
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exists:
+                    type: boolean
+        '400':
+          description: Invalid email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/username/exists:
+    post:
+      tags: [Auth]
+      summary: Check if username is taken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+      responses:
+        '200':
+          description: Check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exists:
+                    type: boolean
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth:
+    post:
+      tags: [Auth]
+      summary: Login or register
+      description: |
+        Single endpoint for both login and registration. If the email doesn't exist,
+        a new account is created automatically. Returns a JWT token on success.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Authenticated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Login successful"
+                  token:
+                    type: string
+                    description: JWT bearer token
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid payload or wrong password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/username:
+    post:
+      tags: [Auth]
+      summary: Set or update username
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 30
+      responses:
+        '200':
+          description: Username updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessage'
+        '400':
+          description: Username taken or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (invalidate token server-side)
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessage'
+
+  # ── Waitlist ──────────────────────────────────────────────────────────────
+
+  /waitlist:
+    post:
+      tags: [Waitlist]
+      summary: Join the waitlist
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                referral_code:
+                  type: string
+                  description: Optional referral code from an existing waitlist member
+      responses:
+        '200':
+          description: Joined or already on waitlist
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Prices ────────────────────────────────────────────────────────────────
+
+  /prices:
+    get:
+      tags: [Prices]
+      summary: Live BTC, ETH, SOL prices
+      security: []
+      responses:
+        '200':
+          description: Latest prices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  prices:
+                    $ref: '#/components/schemas/PriceMap'
+
+  /prices/vant:
+    get:
+      tags: [Prices]
+      summary: Vantic-internal prices with buy rate
+      security: []
+      responses:
+        '200':
+          description: Prices with Vantic buy rate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  buy_rate:
+                    type: number
+                    description: Naira to USD rate used internally
+                    example: 1.0
+                  prices:
+                    $ref: '#/components/schemas/PriceMap'
+
+  /prices/vant/{asset}:
+    get:
+      tags: [Prices]
+      summary: Price for a single asset
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [sol, btc, eth]
+          example: btc
+      responses:
+        '200':
+          description: Asset price in USD
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  asset:
+                    type: string
+                  price:
+                    type: number
+                    example: 90000.00
+        '404':
+          description: Asset not supported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── User ─────────────────────────────────────────────────────────────────
+
+  /user:
+    get:
+      tags: [User]
+      summary: Get current user profile and wallet
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/User'
+                  wallet:
+                    $ref: '#/components/schemas/Wallet'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags: [User]
+      summary: Update user profile
+      description: |
+        Updatable fields: `username`, `socials`, `profile_image_url`, `full_name`.
+        Other fields in the body are silently ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                full_name:
+                  type: string
+                socials:
+                  type: array
+                  items:
+                    type: string
+                profile_image_url:
+                  type: string
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: No valid fields / validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/profile-image:
+    post:
+      tags: [User]
+      summary: Upload profile image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Image uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  profile_image_url:
+                    type: string
+        '400':
+          description: No image provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Balance ───────────────────────────────────────────────────────────────
+
+  /balance:
+    get:
+      tags: [Balance]
+      summary: Get user balance
+      description: Returns all asset balances. `total_usd` and `total_demo_usd` are computed from
+        spot prices at query time.
+      responses:
+        '200':
+          description: Balance object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  balance:
+                    $ref: '#/components/schemas/Balance'
+        '404':
+          description: Balance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /balance/sync:
+    get:
+      tags: [Balance]
+      summary: Sync on-chain balances to Firestore
+      description: Fetches live SOL and SPL token balances from Solana and updates the stored balance.
+        Returns updated balance object.
+      responses:
+        '200':
+          description: Synced balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  balance:
+                    $ref: '#/components/schemas/Balance'
+        '404':
+          description: Wallet not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /balance/sell:
+    post:
+      tags: [Balance]
+      summary: Sell an asset for USD
+      description: |
+        Converts a crypto asset to USD in the user's vault balance.
+        For SOL assets, this triggers an on-chain transfer to the Vantic vault.
+        The operation is asynchronous — the response is immediate but the balance
+        credit happens in a background goroutine.
+
+        **Assets:** `sol`, `eth_base`, `usdc_sol`, `usdc_base`, `demo_sol`, `demo_usdc_sol`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset, amount, nature]
+              properties:
+                asset:
+                  type: string
+                  enum: [sol, eth_base, usdc_sol, usdc_base, demo_sol, demo_usdc_sol]
+                  example: "usdc_sol"
+                amount:
+                  type: number
+                  example: 50.0
+                nature:
+                  type: string
+                  enum: [real, demo]
+                  example: "real"
+      responses:
+        '200':
+          description: Sell initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessage'
+        '400':
+          description: Insufficient balance or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /demo/fund:
+    post:
+      tags: [Balance]
+      summary: Fund demo account via faucet
+      description: |
+        Transfers SOL from the Vantic devnet faucet to the user's demo wallet.
+        Maximum $200 USD per request. User must have less than $1.00 demo balance to request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: number
+                  description: Amount in USD (max 200)
+                  example: 100
+      responses:
+        '200':
+          description: Demo account funded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  tx_hash:
+                    type: string
+                    description: Solana devnet transaction hash
+        '400':
+          description: Over limit or already funded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Transactions ──────────────────────────────────────────────────────────
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Get transaction history
+      responses:
+        '200':
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  transactions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+
+  /transactions/email:
+    post:
+      tags: [Transactions]
+      summary: Resend transaction confirmation email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+      responses:
+        '200':
+          description: Email queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessage'
+
+  # ── Markets ───────────────────────────────────────────────────────────────
+
+  /markets:
+    get:
+      tags: [Markets]
+      summary: List markets
+      security: []
+      description: |
+        Query markets with optional filters. Default returns active markets.
+        - `?type=CAPPM&status=active` → active crypto price markets (Crypto tab)
+        - `?type=GEM&status=active` → active general event markets (General tab)
+        - `?status=resolved` → all resolved markets (History)
+        - `?asset=BTC` → all CAPPM markets for BTC
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [CAPPM, GEM]
+          description: Filter by market type
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, resolved]
+          description: Filter by status
+        - name: asset
+          in: query
+          schema:
+            type: string
+            enum: [BTC, ETH, SOL]
+          description: Filter CAPPM markets by asset
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Markets list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  markets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Market'
+                  count:
+                    type: integer
+
+  /markets/{id}:
+    get:
+      tags: [Markets]
+      summary: Get a single market
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Market detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+        '404':
+          description: Market not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /markets/{id}/orderbook:
+    get:
+      tags: [Markets]
+      summary: Get full orderbook snapshot for a market
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Orderbook snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  orderbook:
+                    $ref: '#/components/schemas/OrderbookSnapshot'
+
+  /markets/{id}/orderbook/depth:
+    get:
+      tags: [Markets]
+      summary: Get orderbook depth (bids + asks for one side)
+      description: |
+        Returns the top N price levels for a single side (YES or NO).
+        Also returns the current spread and last traded price.
+        For real-time updates, use the WebSocket endpoint `GET /ws/markets/:id/orderbook`.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: side
+          in: query
+          schema:
+            type: string
+            enum: [YES, NO]
+            default: YES
+        - name: levels
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 50
+          description: Number of price levels to return on each side
+      responses:
+        '200':
+          description: Depth data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market_id:
+                    type: string
+                  side:
+                    type: string
+                    enum: [YES, NO]
+                  bids:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderbookLevel'
+                  asks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderbookLevel'
+                  spread:
+                    type: number
+                    example: 0.02
+                  last_traded_price:
+                    type: number
+                    example: 0.61
+
+  /markets/{id}/onchain:
+    get:
+      tags: [OVM]
+      summary: Get raw on-chain state for a market (OVM)
+      description: |
+        Returns both the Postgres record and the raw Solana account state.
+        Users can cross-reference the outcome with any Solana explorer using the
+        `explorer_urls` in the response to verify settlement independently.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: On-chain market state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+                  onchain:
+                    $ref: '#/components/schemas/OnchainMarket'
+                  explorer_urls:
+                    type: object
+                    properties:
+                      creation:
+                        type: string
+                        description: Solana explorer URL for the creation transaction
+                      settlement:
+                        type: string
+                        description: Solana explorer URL for the settlement transaction
+                        nullable: true
+                      account:
+                        type: string
+                        description: Solana explorer URL for the market PDA account
+        '404':
+          description: Market not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /markets/onchain:
+    get:
+      tags: [OVM]
+      summary: List all markets with on-chain state
+      security: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, resolved]
+      responses:
+        '200':
+          description: On-chain markets list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  markets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OnchainMarket'
+                  count:
+                    type: integer
+
+  # ── Orders ────────────────────────────────────────────────────────────────
+
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Place an order
+      description: |
+        Places a limit or market order on a prediction market.
+
+        **Limit order:** Specify `price` (0.01–99.99 USD per share). Order sits in the
+        book until matched or cancelled. The required cost (`price × quantity`) is
+        locked from your available balance immediately.
+
+        **Market order:** Executes immediately against the best available prices.
+        No `price` field needed. Eats through the orderbook until filled or liquidity runs out.
+
+        Both sides are always available: YES (betting the outcome is YES) and
+        NO (betting the outcome is NO). YES + NO fills in any market always total $1.00.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [market_id, side, type, quantity]
+              properties:
+                market_id:
+                  type: string
+                side:
+                  type: string
+                  enum: [YES, NO]
+                type:
+                  type: string
+                  enum: [LIMIT, MARKET]
+                price:
+                  type: number
+                  description: Required for LIMIT orders. USD per share, between 0.01–99.99.
+                  example: 0.62
+                quantity:
+                  type: number
+                  description: Number of shares
+                  example: 100
+                expires_at:
+                  type: integer
+                  description: Optional Unix timestamp for order expiry (limit orders only)
+      responses:
+        '200':
+          description: Order placed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  order:
+                    $ref: '#/components/schemas/Order'
+        '400':
+          description: Insufficient balance, invalid market, or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Orders]
+      summary: Get user's orders
+      parameters:
+        - name: market_id
+          in: query
+          schema:
+            type: string
+          description: Optional — filter by market
+      responses:
+        '200':
+          description: User's orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  count:
+                    type: integer
+
+  /orders/{id}:
+    delete:
+      tags: [Orders]
+      summary: Cancel an order
+      description: Cancels an open or partially-filled order. Locked balance is released immediately.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  order_id:
+                    type: string
+        '400':
+          description: Order not found or already filled/cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /positions:
+    get:
+      tags: [Orders]
+      summary: Get user's positions
+      description: Returns all active and settled positions. A position is created when an order
+        is matched. At market settlement, positions are credited $1.00 per winning share.
+      parameters:
+        - name: market_id
+          in: query
+          schema:
+            type: string
+          description: Optional — filter by market
+      responses:
+        '200':
+          description: User's positions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  positions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Position'
+                  count:
+                    type: integer
+
+  # ── Admin ─────────────────────────────────────────────────────────────────
+
+  /admin/markets/gem:
+    post:
+      tags: [Admin]
+      summary: Create a GEM market
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, data_provider, start_time_utc, duration_seconds]
+              properties:
+                title:
+                  type: string
+                  example: "Will Nigeria win the AFCON final?"
+                description:
+                  type: string
+                data_provider:
+                  type: string
+                  example: "ESPN"
+                start_time_utc:
+                  type: integer
+                  description: Unix timestamp
+                duration_seconds:
+                  type: integer
+                  description: Market duration from start_time_utc
+                  example: 7200
+      responses:
+        '200':
+          description: GEM created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+        '401':
+          description: Unauthorized — invalid admin key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/markets/{id}/settle:
+    post:
+      tags: [Admin]
+      summary: Settle a GEM market
+      security:
+        - adminKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, outcome_description]
+              properties:
+                outcome:
+                  type: string
+                  enum: [YES, NO]
+                outcome_description:
+                  type: string
+                  example: "Nigeria won 2-1"
+      responses:
+        '200':
+          description: Market settled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market_id:
+                    type: string
+                  outcome:
+                    type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/markets/{id}/force-settle:
+    post:
+      tags: [Admin]
+      summary: Force-settle any market and trigger payout distribution
+      description: |
+        For GEM markets only. CAPPM markets auto-settle from Coinbase price data.
+        This endpoint settles the market on-chain AND processes payouts to all winning positions.
+      security:
+        - adminKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, outcome_description]
+              properties:
+                outcome:
+                  type: string
+                  enum: [YES, NO]
+                outcome_description:
+                  type: string
+      responses:
+        '200':
+          description: Market force-settled and payouts distributed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  result:
+                    type: object
+                    description: Settlement processing result with payout summary
+        '400':
+          description: Already resolved or CAPPM market
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/markets/{id}/sync:
+    post:
+      tags: [Admin]
+      summary: Re-sync market state from Solana
+      security:
+        - adminKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Market synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+
+  /admin/markets:
+    get:
+      tags: [Admin]
+      summary: List all markets (admin view)
+      security:
+        - adminKey: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, resolved]
+            default: active
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [CAPPM, GEM]
+      responses:
+        '200':
+          description: All markets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  markets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Market'
+                  count:
+                    type: integer
+
+  /admin/markets/{id}/stats:
+    get:
+      tags: [Admin]
+      summary: Get market stats (volume, open interest, traders)
+      security:
+        - adminKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Market statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+                  stats:
+                    type: object
+                    properties:
+                      open_order_count:
+                        type: integer
+                      open_interest:
+                        type: number
+                        description: Total value in open orders (USD)
+                      yes_open_interest:
+                        type: number
+                      no_open_interest:
+                        type: number
+                      total_shares:
+                        type: number
+                      yes_shares:
+                        type: number
+                      no_shares:
+                        type: number
+                      unique_traders:
+                        type: integer
+                      last_traded_price:
+                        type: number
+                      implied_yes_pct:
+                        type: number
+                        description: Implied probability of YES outcome (0–100)
+                      quote_currency:
+                        type: string
+
+  /admin/orders:
+    get:
+      tags: [Admin]
+      summary: Get all orders for a market
+      security:
+        - adminKey: []
+      parameters:
+        - name: market_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, PARTIALLY_FILLED, FILLED, CANCELLED]
+      responses:
+        '200':
+          description: Orders list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  count:
+                    type: integer
+
+  /admin/users/{email}/exposure:
+    get:
+      tags: [Admin]
+      summary: Get a user's total risk exposure across all markets
+      security:
+        - adminKey: []
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+            format: email
+      responses:
+        '200':
+          description: User exposure summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user_email:
+                    type: string
+                  active_markets:
+                    type: integer
+                  total_locked_in_orders:
+                    type: number
+                    description: Total USD locked across all open limit orders
+                  exposure:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        market_id:
+                          type: string
+                        yes_shares:
+                          type: number
+                        no_shares:
+                          type: number
+                        avg_entry_yes:
+                          type: number
+                        avg_entry_no:
+                          type: number
+                        open_orders_value:
+                          type: number
+                        quote_currency:
+                          type: string

@@ -62,6 +62,10 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// ── Docs ──────────────────────────────────────────────────────────────────
+	r.GET("/docs", swaggerUIHandler)
+	r.GET("/docs/swagger.yaml", swaggerSpecHandler)
+
 	// ── Public ────────────────────────────────────────────────────────────────
 	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)

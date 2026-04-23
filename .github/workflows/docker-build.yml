@@ -23,8 +23,24 @@ jobs:
       - name: Run tests
         run: go test -v ./...
 
+  swagger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate OpenAPI spec
+        run: npx --yes @redocly/cli lint docs/swagger.yaml --format=stylish
+
+      - name: Upload swagger spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-spec
+          path: docs/swagger.yaml
+          retention-days: 30
+
   build-push:
-    needs: test
+    needs: [test, swagger]
     runs-on: ubuntu-latest
     permissions:
       contents: read
