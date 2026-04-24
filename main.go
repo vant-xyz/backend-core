@@ -114,6 +114,7 @@ func main() {
 		auth.GET("/balance", handlers.GetUserBalance)
 		auth.GET("/balance/sync", handlers.SyncBalance)
 		auth.POST("/balance/sell", handlers.SellAsset)
+		auth.POST("/balance/withdraw", handlers.WithdrawBalance)
 		auth.GET("/transactions", handlers.GetTransactions)
 		auth.POST("/transactions/email", handlers.SendTransactionEmail)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)

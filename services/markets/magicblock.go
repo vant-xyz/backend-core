@@ -29,6 +29,15 @@ type privatePaymentResp struct {
 	Transaction string `json:"transaction"`
 }
 
+func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64) (string, error) {
+	settlerKey, err := getSettlerKeypair()
+	if err != nil {
+		return "", fmt.Errorf("settler keypair unavailable: %w", err)
+	}
+	units := uint64(usdAmount * 1_000_000)
+	return SendPrivatePayment(ctx, settlerKey, recipientAddress, units)
+}
+
 func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress string, lamports uint64) (string, error) {
 	reqBody := privatePaymentReq{
 		Payer:    payerKeypair.PublicKey().String(),

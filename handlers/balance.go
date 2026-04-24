@@ -12,8 +12,81 @@ import (
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 	"github.com/vant-xyz/backend-code/services"
+	"github.com/vant-xyz/backend-code/services/markets"
 	"github.com/vant-xyz/backend-code/utils"
 )
+
+func WithdrawBalance(c *gin.Context) {
+	emailStr, _ := c.Get("email")
+	email := emailStr.(string)
+
+	var req struct {
+		Amount             float64 `json:"amount" binding:"required"`
+		DestinationAddress string  `json:"destination_address" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
+		return
+	}
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
+		return
+	}
+
+	if err := db.RunBalanceTransaction(c.Request.Context(), email, func(balance *models.Balance) error {
+		if balance.Naira < req.Amount {
+			return fmt.Errorf("insufficient balance: available=%.2f requested=%.2f", balance.Naira, req.Amount)
+		}
+		balance.Naira -= req.Amount
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		reverse := func() {
+			db.RunBalanceTransaction(context.Background(), email, func(b *models.Balance) error {
+				b.Naira += req.Amount
+				return nil
+			})
+		}
+
+		sig, err := markets.WithdrawFunds(bgCtx, req.DestinationAddress, req.Amount)
+		if err != nil {
+			log.Printf("[Withdraw] Private payment failed for %s to %s: %v — reversing deduction", email, req.DestinationAddress, err)
+			reverse()
+			return
+		}
+
+		log.Printf("[Withdraw] Private payment sent for %s to %s sig=%s", email, req.DestinationAddress, sig)
+
+		transaction := models.Transaction{
+			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
+			UserEmail: email,
+			Amount:    req.Amount,
+			Currency:  "USD",
+			Nature:    "real",
+			Type:      "withdrawal",
+			Status:    "completed",
+			TxHash:    sig,
+			CreatedAt: time.Now(),
+		}
+		if err := db.SaveTransaction(context.Background(), transaction); err != nil {
+			log.Printf("[Withdraw] Failed to save transaction record for %s: %v", email, err)
+		}
+
+		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Withdrawal initiated",
+	})
+}
 
 func GetUserBalance(c *gin.Context) {
 	email, _ := c.Get("email")
