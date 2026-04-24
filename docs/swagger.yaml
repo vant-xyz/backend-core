@@ -179,7 +179,7 @@ components:
           example: "real"
         type:
           type: string
-          enum: [deposit, sell, faucet, payout]
+          enum: [deposit, sell, faucet, payout, withdrawal]
           example: "deposit"
         status:
           type: string
@@ -989,6 +989,55 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessMessage'
+        '400':
+          description: Insufficient balance or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /balance/withdraw:
+    post:
+      tags: [Balance]
+      summary: Withdraw USD vault balance to an external Solana wallet
+      description: |
+        Deducts from the user's USD vault balance and sends USDC to the specified
+        Solana address via MagicBlock Private Payments — the transfer is not visible
+        on the public ledger.
+
+        The response is immediate. The on-chain transfer happens asynchronously in
+        the background. If the transfer fails, the deducted amount is automatically
+        reversed. A `BALANCE_UPDATE` WebSocket event is broadcast on completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, destination_address]
+              properties:
+                amount:
+                  type: number
+                  description: Amount in USD to withdraw
+                  example: 50.00
+                destination_address:
+                  type: string
+                  description: Solana public key to receive the USDC
+                  example: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+      responses:
+        '200':
+          description: Withdrawal initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Withdrawal initiated"
         '400':
           description: Insufficient balance or invalid request
           content:
