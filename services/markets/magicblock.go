@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,16 +18,38 @@ import (
 	"github.com/gagliardetto/solana-go/rpc/ws"
 )
 
-const privatePaymentsEndpoint = "https://payments.magicblock.app/api/v1/transfer"
+const privatePaymentsBase = "https://payments.magicblock.app"
 
 type privatePaymentReq struct {
-	Payer    string `json:"payer"`
-	To       string `json:"to"`
-	Lamports uint64 `json:"lamports"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	Mint          string `json:"mint"`
+	Amount        uint64 `json:"amount"`
+	FromBalance   string `json:"fromBalance"`
+	ToBalance     string `json:"toBalance"`
+	Visibility    string `json:"visibility"`
 }
 
 type privatePaymentResp struct {
-	Transaction string `json:"transaction"`
+	Transaction          string   `json:"transaction"`
+	RequiredSigners      []string `json:"requiredSigners"`
+	SendTo               string   `json:"sendTo"`
+	RecentBlockhash      string   `json:"recentBlockhash"`
+	LastValidBlockHeight uint64   `json:"lastValidBlockHeight"`
+}
+
+func getUSDCMint() string {
+	if mint := os.Getenv("DEVNET_SOL_USDC_MINT"); mint != "" {
+		return mint
+	}
+	return "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+}
+
+func getEphemeralRPCURL() string {
+	if url := os.Getenv("MAGICBLOCK_EPHEMERAL_RPC_URL"); url != "" {
+		return url
+	}
+	return "https://devnet-eu.magicblock.app"
 }
 
 func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64) (string, error) {
@@ -38,11 +61,15 @@ func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float
 	return SendPrivatePayment(ctx, settlerKey, recipientAddress, units)
 }
 
-func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress string, lamports uint64) (string, error) {
+func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress string, amount uint64) (string, error) {
 	reqBody := privatePaymentReq{
-		Payer:    payerKeypair.PublicKey().String(),
-		To:       recipientAddress,
-		Lamports: lamports,
+		From:        payerKeypair.PublicKey().String(),
+		To:          recipientAddress,
+		Mint:        getUSDCMint(),
+		Amount:      amount,
+		FromBalance: "base",
+		ToBalance:   "base",
+		Visibility:  "private",
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -51,7 +78,7 @@ func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, rec
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Post(privatePaymentsEndpoint, "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(privatePaymentsBase+"/v1/spl/transfer", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("private payment API: %w", err)
 	}
@@ -85,6 +112,10 @@ func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, rec
 	}
 
 	rpcURLs := getFallbackRPCURLs()
+	if payResp.SendTo == "ephemeral" {
+		rpcURLs = []string{getEphemeralRPCURL()}
+	}
+
 	for _, rpcURL := range rpcURLs {
 		wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
 		wsCtx, cancel := context.WithTimeout(ctx, rpcTimeout)

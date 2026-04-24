@@ -25,10 +25,11 @@ const (
 	discriminatorGetMarket      = 4
 	discriminatorDelegateMarket = 5
 
-	marketSeed     = "market"
-	settlementSeed = "settlement"
+	marketSeed = "market"
 
 	delegationProgramIDStr = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+	magicProgramIDStr      = "Magic11111111111111111111111111111111111111"
+	magicContextIDStr      = "MagicContext1111111111111111111111111111111"
 
 	rpcTimeout = 30 * time.Second
 )
@@ -64,21 +65,6 @@ func deriveMarketPDA(marketID string) (solana.PublicKey, uint8, error) {
 	)
 	if err != nil {
 		return solana.PublicKey{}, 0, fmt.Errorf("failed to derive market PDA for %s: %w", marketID, err)
-	}
-	return addr, bump, nil
-}
-
-func deriveSettlementPDA(marketID string) (solana.PublicKey, uint8, error) {
-	programID, err := getProgramID()
-	if err != nil {
-		return solana.PublicKey{}, 0, err
-	}
-	addr, bump, err := solana.FindProgramAddress(
-		[][]byte{[]byte(settlementSeed), []byte(marketID)},
-		programID,
-	)
-	if err != nil {
-		return solana.PublicKey{}, 0, fmt.Errorf("failed to derive settlement PDA for %s: %w", marketID, err)
 	}
 	return addr, bump, nil
 }
@@ -130,15 +116,15 @@ func getFallbackRPCURLs() []string {
 }
 
 // sendAndConfirm builds, signs, and submits a transaction. It iterates through
-// all fallback RPC URLs — each URL gets a fresh WS connection and blockhash.
+// the provided rpcURLs — each URL gets a fresh WS connection and blockhash.
 // Transaction build and signing errors are terminal (not retried across URLs)
 // since they indicate a code-level problem, not an RPC availability problem.
 func sendAndConfirm(
+	rpcURLs []string,
 	instructions []solana.Instruction,
 	signers []solana.PrivateKey,
 	feePayer solana.PublicKey,
 ) (string, error) {
-	rpcURLs := getFallbackRPCURLs()
 	var lastErr error
 
 	for _, rpcURL := range rpcURLs {
@@ -319,7 +305,7 @@ func CreateMarketCAPPM(params CreateMarketCAPPMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	sig, err := sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	sig, err := sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 	if err != nil {
 		return "", err
 	}
@@ -393,7 +379,7 @@ func DelegateMarket(marketID string) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	return sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 }
 
 type CreateMarketGEMParams struct {
@@ -443,7 +429,7 @@ func CreateMarketGEM(params CreateMarketGEMParams) (string, error) {
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
 
-	sig, err := sendAndConfirm([]solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
+	sig, err := sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, creatorPub)
 	if err != nil {
 		return "", err
 	}
@@ -470,10 +456,6 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	settlementPDA, _, err := deriveSettlementPDA(marketID)
-	if err != nil {
-		return "", err
-	}
 
 	message := fmt.Sprintf("VANT_CAPPM_SETTLEMENT:%s:%d", marketID, endPriceCents)
 	msgBytes := []byte(message)
@@ -483,6 +465,8 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 	}
 
 	settlerPub := settlerKey.PublicKey()
+	magicProgramID := solana.MustPublicKeyFromBase58(magicProgramIDStr)
+	magicContextID := solana.MustPublicKeyFromBase58(magicContextIDStr)
 
 	ed25519Ix, err := buildEd25519VerifyInstruction(settlerPub, msgBytes, sig)
 	if err != nil {
@@ -499,13 +483,14 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 
 	settleIx := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlementPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: settlerPub, IsSigner: true, IsWritable: true},
-		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
+		{PublicKey: magicProgramID, IsSigner: false, IsWritable: false},
+		{PublicKey: magicContextID, IsSigner: false, IsWritable: true},
 	}, data)
 
 	return sendAndConfirm(
+		[]string{getEphemeralRPCURL()},
 		[]solana.Instruction{ed25519Ix, settleIx},
 		[]solana.PrivateKey{settlerKey},
 		settlerPub,
@@ -525,10 +510,6 @@ func SettleMarketGEM(marketID string, outcome uint8, outcomeDescription string) 
 	if err != nil {
 		return "", err
 	}
-	settlementPDA, _, err := deriveSettlementPDA(marketID)
-	if err != nil {
-		return "", err
-	}
 
 	outcomeStr := "YES"
 	if outcome == 1 {
@@ -542,6 +523,8 @@ func SettleMarketGEM(marketID string, outcome uint8, outcomeDescription string) 
 	}
 
 	settlerPub := settlerKey.PublicKey()
+	magicProgramID := solana.MustPublicKeyFromBase58(magicProgramIDStr)
+	magicContextID := solana.MustPublicKeyFromBase58(magicContextIDStr)
 
 	ed25519Ix, err := buildEd25519VerifyInstruction(settlerPub, msgBytes, sig)
 	if err != nil {
@@ -559,13 +542,14 @@ func SettleMarketGEM(marketID string, outcome uint8, outcomeDescription string) 
 
 	settleIx := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlementPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: settlerPub, IsSigner: true, IsWritable: true},
-		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
+		{PublicKey: magicProgramID, IsSigner: false, IsWritable: false},
+		{PublicKey: magicContextID, IsSigner: false, IsWritable: true},
 	}, data)
 
 	return sendAndConfirm(
+		[]string{getEphemeralRPCURL()},
 		[]solana.Instruction{ed25519Ix, settleIx},
 		[]solana.PrivateKey{settlerKey},
 		settlerPub,
