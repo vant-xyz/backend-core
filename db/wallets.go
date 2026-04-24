@@ -39,7 +39,7 @@ func GetAllWallets(ctx context.Context) ([]models.Wallet, error) {
 	}
 	defer rows.Close()
 
-	var wallets []models.Wallet
+	wallets := make([]models.Wallet, 0)
 	for rows.Next() {
 		var w models.Wallet
 		if err := rows.Scan(
