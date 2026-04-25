@@ -471,11 +471,17 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		log.Printf("[Engine] CrossFill: PG fill update failed for maker %s: %v", maker.ID, err)
 	}
 
+	log.Printf("[Engine] CrossFill: deducting locked balance — taker=%s amount=%.4f maker=%s amount=%.4f",
+		taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*taker.Price); err != nil {
 		log.Printf("[Engine] CrossFill: failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
+	} else {
+		log.Printf("[Engine] CrossFill: locked balance deducted for taker %s", taker.UserEmail)
 	}
 	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*maker.Price); err != nil {
 		log.Printf("[Engine] CrossFill: failed to deduct locked balance for maker %s: %v", maker.UserEmail, err)
+	} else {
+		log.Printf("[Engine] CrossFill: locked balance deducted for maker %s", maker.UserEmail)
 	}
 
 	if _, err := UpsertPosition(ctx, UpsertPositionInput{
