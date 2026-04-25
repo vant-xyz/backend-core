@@ -32,15 +32,7 @@ func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Pos
 	now := time.Now()
 
 	if existing != nil {
-		totalShares := existing.Shares + input.Shares
-		newAvgEntry := ((existing.Shares * existing.AvgEntryPrice) + (input.Shares * input.FillPrice)) / totalShares
-		if err := db.UpdatePosition(ctx, existing.ID, totalShares, newAvgEntry); err != nil {
-			return nil, fmt.Errorf("failed to update position %s: %w", existing.ID, err)
-		}
-		existing.Shares = totalShares
-		existing.AvgEntryPrice = newAvgEntry
-		existing.UpdatedAt = now
-		return existing, nil
+		return updateExistingPosition(ctx, existing, input.Shares, input.FillPrice, now)
 	}
 
 	position := &models.Position{
@@ -59,9 +51,29 @@ func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Pos
 	}
 
 	if err := db.SavePosition(ctx, position); err != nil {
+		if db.IsDuplicateKeyError(err) {
+			// Concurrent fill beat us to the insert — re-fetch and update.
+			existing, err = db.GetUserPositionForMarketSide(ctx, input.UserEmail, input.MarketID, input.Side)
+			if err != nil || existing == nil {
+				return nil, fmt.Errorf("failed to recover from concurrent position insert: %w", err)
+			}
+			return updateExistingPosition(ctx, existing, input.Shares, input.FillPrice, now)
+		}
 		return nil, fmt.Errorf("failed to save position: %w", err)
 	}
 	return position, nil
+}
+
+func updateExistingPosition(ctx context.Context, existing *models.Position, newShares, fillPrice float64, now time.Time) (*models.Position, error) {
+	totalShares := existing.Shares + newShares
+	newAvgEntry := ((existing.Shares * existing.AvgEntryPrice) + (newShares * fillPrice)) / totalShares
+	if err := db.UpdatePosition(ctx, existing.ID, totalShares, newAvgEntry); err != nil {
+		return nil, fmt.Errorf("failed to update position %s: %w", existing.ID, err)
+	}
+	existing.Shares = totalShares
+	existing.AvgEntryPrice = newAvgEntry
+	existing.UpdatedAt = now
+	return existing, nil
 }
 
 func SettlePosition(ctx context.Context, positionID string, outcome models.MarketOutcome) error {

@@ -6,8 +6,24 @@ import (
 	"log"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vant-xyz/backend-code/models"
 )
+
+func IsDuplicateKeyError(err error) bool {
+	for e := err; e != nil; {
+		if pe, ok := e.(*pgconn.PgError); ok {
+			return pe.Code == "23505"
+		}
+		type unwrapper interface{ Unwrap() error }
+		if u, ok := e.(unwrapper); ok {
+			e = u.Unwrap()
+		} else {
+			break
+		}
+	}
+	return false
+}
 
 const positionColumns = `
 	id, user_email, market_id, side, shares, avg_entry_price,

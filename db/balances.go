@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vant-xyz/backend-code/models"
 )
 
@@ -54,9 +56,25 @@ func SetBalance(ctx context.Context, email string, field string, amount float64)
 }
 
 // RunBalanceTransaction reads the balance row inside a serializable transaction,
-// runs mutatorFn, and writes the result back atomically.
-// Uses SELECT FOR UPDATE to prevent concurrent modifications.
+// runs mutatorFn, and writes the result back atomically. Retries on PostgreSQL
+// serialization failures (SQLSTATE 40001) which occur under concurrent load.
 func RunBalanceTransaction(ctx context.Context, userEmail string, mutatorFn func(*models.Balance) error) error {
+	const maxAttempts = 5
+	for attempt := range maxAttempts {
+		err := runBalanceTxOnce(ctx, userEmail, mutatorFn)
+		if err == nil {
+			return nil
+		}
+		if isSerializationFailure(err) && attempt < maxAttempts-1 {
+			time.Sleep(time.Duration(attempt+1) * 15 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("balance transaction for %s failed after %d attempts", userEmail, maxAttempts)
+}
+
+func runBalanceTxOnce(ctx context.Context, userEmail string, mutatorFn func(*models.Balance) error) error {
 	tx, err := Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return fmt.Errorf("failed to begin balance transaction: %w", err)
@@ -111,6 +129,24 @@ func RunBalanceTransaction(ctx context.Context, userEmail string, mutatorFn func
 	}
 
 	return tx.Commit(ctx)
+}
+
+func isSerializationFailure(err error) bool {
+	if pgconn.SafeToRetry(err) {
+		return true
+	}
+	type unwrapper interface{ Unwrap() error }
+	for e := err; e != nil; {
+		if pe, ok := e.(*pgconn.PgError); ok {
+			return pe.Code == "40001"
+		}
+		if u, ok := e.(unwrapper); ok {
+			e = u.Unwrap()
+		} else {
+			break
+		}
+	}
+	return false
 }
 
 func balanceFieldToColumn(field string) (string, error) {
