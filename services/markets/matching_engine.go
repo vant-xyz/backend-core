@@ -277,6 +277,11 @@ func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
 	taker.RemainingQty -= qty
 	maker.FilledQty += qty
 	maker.RemainingQty -= qty
+	if taker.RemainingQty == 0 {
+		taker.Status = models.OrderStatusFilled
+	} else {
+		taker.Status = models.OrderStatusPartiallyFilled
+	}
 	if maker.RemainingQty == 0 {
 		maker.Status = models.OrderStatusFilled
 	} else {
