@@ -63,10 +63,11 @@ func main() {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     origins,
 		AllowMethods:     []string{"POST", "OPTIONS", "GET", "PUT", "DELETE"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Admin-Key"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Admin-Key", "X-API-Key"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
+	r.Use(handlers.APIKeyMiddleware())
 
 	// ── Docs ──────────────────────────────────────────────────────────────────
 	r.GET("/docs", swaggerUIHandler)
