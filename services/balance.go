@@ -3,10 +3,17 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 )
+
+const balanceEpsilon = 1e-9
+
+func roundCents(v float64) float64 {
+	return math.Round(v*100) / 100
+}
 
 const lockedBalanceField = "locked_balance"
 
@@ -53,7 +60,7 @@ func UnlockBalance(ctx context.Context, userEmail string, amount float64, curren
 	}
 
 	return db.RunBalanceTransaction(ctx, userEmail, func(balance *models.Balance) error {
-		if balance.LockedBalance < amount {
+		if balance.LockedBalance+balanceEpsilon < amount {
 			return fmt.Errorf("locked balance %.2f is less than unlock amount %.2f",
 				balance.LockedBalance, amount)
 		}
@@ -61,9 +68,10 @@ func UnlockBalance(ctx context.Context, userEmail string, amount float64, curren
 		if balanceField == "" {
 			return fmt.Errorf("unsupported quote currency: %s", currency)
 		}
+		actual := math.Min(amount, balance.LockedBalance)
 		current := balanceFieldValue(balance, balanceField)
-		setBalanceField(balance, balanceField, current+amount)
-		setBalanceField(balance, lockedBalanceField, balance.LockedBalance-amount)
+		setBalanceField(balance, balanceField, roundCents(current+actual))
+		setBalanceField(balance, lockedBalanceField, roundCents(balance.LockedBalance-actual))
 		return nil
 	})
 }
@@ -77,11 +85,12 @@ func DeductLockedBalance(ctx context.Context, userEmail string, amount float64) 
 	}
 
 	return db.RunBalanceTransaction(ctx, userEmail, func(balance *models.Balance) error {
-		if balance.LockedBalance < amount {
+		if balance.LockedBalance+balanceEpsilon < amount {
 			return fmt.Errorf("locked balance %.2f is less than deduct amount %.2f",
 				balance.LockedBalance, amount)
 		}
-		setBalanceField(balance, lockedBalanceField, balance.LockedBalance-amount)
+		actual := math.Min(amount, balance.LockedBalance)
+		setBalanceField(balance, lockedBalanceField, roundCents(balance.LockedBalance-actual))
 		return nil
 	})
 }

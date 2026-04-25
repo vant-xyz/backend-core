@@ -224,6 +224,53 @@ func TestDeductLockedBalance_MoreThanLocked_ReturnsError(t *testing.T) {
 	}
 }
 
+// ── Float precision (epsilon tolerance) ──────────────────────────────────────
+
+// Reproduces the henry scenario: lock qty*price, then deduct qty*price where
+// floating point recomputation of qty*price may differ by a sub-cent epsilon.
+func TestDeductLockedBalance_FloatPrecision_DoesNotFail(t *testing.T) {
+	initTestDB(t)
+	email := createTestUser(t, 100.0)
+
+	qty, price := 56.0, 0.40 // 56 * 0.40 = 22.4, not exactly representable
+	lockAmt := qty * price
+	if err := services.LockBalance(context.Background(), email, lockAmt, "USD"); err != nil {
+		t.Fatalf("LockBalance: %v", err)
+	}
+	// Recompute separately — may differ by epsilon in float64
+	deductAmt := qty * price
+	if err := services.DeductLockedBalance(context.Background(), email, deductAmt); err != nil {
+		t.Errorf("DeductLockedBalance failed on float-recomputed amount: %v", err)
+	}
+	_, locked := getBalance(t, email)
+	if locked != 0 {
+		t.Errorf("locked after full deduct = %.10f, want 0", locked)
+	}
+}
+
+// Reproduces the grace scenario: lock 74*0.28, partially deduct 22*0.28 (cross-fill),
+// then unlock the remaining 52*0.28 (settlement refund). The accumulated float from
+// two separate operations must not block the final unlock.
+func TestUnlockBalance_FloatPrecision_AfterPartialDeduct_Succeeds(t *testing.T) {
+	initTestDB(t)
+	email := createTestUser(t, 100.0)
+
+	if err := services.LockBalance(context.Background(), email, 74*0.28, "USD"); err != nil {
+		t.Fatalf("LockBalance: %v", err)
+	}
+	if err := services.DeductLockedBalance(context.Background(), email, 22*0.28); err != nil {
+		t.Fatalf("DeductLockedBalance (partial fill): %v", err)
+	}
+	// Remaining locked should be ~52*0.28; unlock it (settlement refund)
+	if err := services.UnlockBalance(context.Background(), email, 52*0.28, "USD"); err != nil {
+		t.Errorf("UnlockBalance failed on float-accumulated locked balance: %v", err)
+	}
+	_, locked := getBalance(t, email)
+	if locked != 0 {
+		t.Errorf("locked after full refund = %.10f, want 0", locked)
+	}
+}
+
 // ── Full order lifecycle ──────────────────────────────────────────────────────
 
 func TestBalanceLifecycle_LockDeductCredit(t *testing.T) {
