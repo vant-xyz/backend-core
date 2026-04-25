@@ -8,6 +8,12 @@ info:
     Most endpoints require a JWT Bearer token. Obtain one via `POST /auth`.
     Pass it as: `Authorization: Bearer <token>`
 
+    ## API Key
+    When the server has `API_MASTER_KEY` configured, every request (except `GET /health`
+    and `GET /docs*`) must include the header `X-API-Key: <key>`. Requests without a
+    valid key receive `401 Unauthorized`. If `API_MASTER_KEY` is not set the middleware
+    is disabled and no key is required.
+
     ## Admin Endpoints
     Admin routes require the `X-Admin-Key` header instead of JWT.
 
@@ -40,6 +46,7 @@ servers:
 
 security:
   - bearerAuth: []
+  - masterApiKey: []
 
 components:
   securitySchemes:
@@ -51,6 +58,13 @@ components:
       type: apiKey
       in: header
       name: X-Admin-Key
+    masterApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        Server-wide API key. Required on all routes when `API_MASTER_KEY` is set
+        in the server environment. Exempt routes: `GET /health`, `GET /docs*`.
 
   schemas:
     ErrorResponse:
