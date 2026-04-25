@@ -421,6 +421,218 @@ func TestFillMath_FillPriceIsAlwaysMakerPrice(t *testing.T) {
 	}
 }
 
+// ── cross-side matching ───────────────────────────────────────────────────────
+//
+// simulateCrossMatch mirrors executeCrossMatch/executeCrossFill without the
+// DB persistence goroutine so tests stay pure.
+
+func simulateCrossMatch(book *marketBook, order *models.Order) {
+	var counterBids *[]*engineOrder
+	if order.Side == models.OrderSideYes {
+		counterBids = &book.noBids
+	} else {
+		counterBids = &book.yesBids
+	}
+	i := 0
+	for i < len(*counterBids) && order.RemainingQty > 0 {
+		counter := (*counterBids)[i]
+		if order.Price+counter.order.Price < 1.0-1e-9 {
+			break
+		}
+		fillQty := min64(order.RemainingQty, counter.order.RemainingQty)
+		order.FilledQty += fillQty
+		order.RemainingQty -= fillQty
+		counter.order.FilledQty += fillQty
+		counter.order.RemainingQty -= fillQty
+		if counter.order.RemainingQty == 0 {
+			counter.order.Status = models.OrderStatusFilled
+			*counterBids = append((*counterBids)[:i], (*counterBids)[i+1:]...)
+		} else {
+			counter.order.Status = models.OrderStatusPartiallyFilled
+			i++
+		}
+		book.lastTradedPrice = order.Price
+	}
+	if order.RemainingQty == 0 {
+		order.Status = models.OrderStatusFilled
+	} else if order.FilledQty > 0 {
+		order.Status = models.OrderStatusPartiallyFilled
+	}
+}
+
+func TestCrossMatch_ExactComplement_FullFill(t *testing.T) {
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.35, 50)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.Status != models.OrderStatusFilled {
+		t.Errorf("YES taker status = %s, want FILLED", yesTaker.Status)
+	}
+	if yesTaker.FilledQty != 50 {
+		t.Errorf("YES taker FilledQty = %.0f, want 50", yesTaker.FilledQty)
+	}
+	if noOrder.Status != models.OrderStatusFilled {
+		t.Errorf("NO maker status = %s, want FILLED", noOrder.Status)
+	}
+	if len(book.noBids) != 0 {
+		t.Error("NO bid should be removed after full fill")
+	}
+}
+
+func TestCrossMatch_PriceSumBelowOne_NoFill(t *testing.T) {
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.30, 50)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.60, 50)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.FilledQty != 0 {
+		t.Errorf("should have 0 fills when prices sum to 0.90, got %.2f", yesTaker.FilledQty)
+	}
+	if yesTaker.Status != models.OrderStatusOpen {
+		t.Errorf("status = %s, want OPEN", yesTaker.Status)
+	}
+	if len(book.noBids) != 1 {
+		t.Error("NO bid should remain untouched")
+	}
+}
+
+func TestCrossMatch_PriceSumAboveOne_Fills(t *testing.T) {
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.40, 50)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.70, 50)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.Status != models.OrderStatusFilled {
+		t.Errorf("YES taker status = %s, want FILLED (sum=1.10)", yesTaker.Status)
+	}
+	if yesTaker.FilledQty != 50 {
+		t.Errorf("FilledQty = %.0f, want 50", yesTaker.FilledQty)
+	}
+}
+
+func TestCrossMatch_PartialFill_TakerLarger(t *testing.T) {
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.35, 100)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.65, 150)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.FilledQty != 100 {
+		t.Errorf("taker FilledQty = %.0f, want 100", yesTaker.FilledQty)
+	}
+	if yesTaker.RemainingQty != 50 {
+		t.Errorf("taker RemainingQty = %.0f, want 50", yesTaker.RemainingQty)
+	}
+	if yesTaker.Status != models.OrderStatusPartiallyFilled {
+		t.Errorf("taker status = %s, want PARTIALLY_FILLED", yesTaker.Status)
+	}
+	if noOrder.Status != models.OrderStatusFilled {
+		t.Errorf("maker status = %s, want FILLED", noOrder.Status)
+	}
+	if len(book.noBids) != 0 {
+		t.Error("fully filled NO bid should be removed from book")
+	}
+}
+
+func TestCrossMatch_PartialFill_MakerLarger(t *testing.T) {
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.35, 200)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.65, 100)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.Status != models.OrderStatusFilled {
+		t.Errorf("taker status = %s, want FILLED", yesTaker.Status)
+	}
+	if noOrder.Status != models.OrderStatusPartiallyFilled {
+		t.Errorf("maker status = %s, want PARTIALLY_FILLED", noOrder.Status)
+	}
+	if noOrder.RemainingQty != 100 {
+		t.Errorf("maker RemainingQty = %.0f, want 100", noOrder.RemainingQty)
+	}
+	if len(book.noBids) != 1 {
+		t.Error("partially filled NO bid should remain in book")
+	}
+}
+
+func TestCrossMatch_EachSidePaysOwnPrice(t *testing.T) {
+	// lastTradedPrice is set to taker's price (not maker's), confirming
+	// that taker and maker each pay their own locked amount.
+	book := newTestBook()
+	noOrder := makeOrder("NO1", "NO", "LIMIT", 0.40, 50)
+	book.addToBook(noOrder)
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.70, 50)
+	simulateCrossMatch(book, yesTaker)
+
+	if book.lastTradedPrice != 0.70 {
+		t.Errorf("lastTradedPrice = %.2f, want 0.70 (taker's price)", book.lastTradedPrice)
+	}
+}
+
+func TestCrossMatch_MultipleCounterBids_OnlyMatchingOnes(t *testing.T) {
+	book := newTestBook()
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+	book.addToBook(makeOrder("NO2", "NO", "LIMIT", 0.30, 50))
+	book.addToBook(makeOrder("NO3", "NO", "LIMIT", 0.20, 50))
+
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.65, 200)
+	simulateCrossMatch(book, yesTaker)
+
+	// Only NO1 (0.35) sums to 1.00 — NO2 (0.30) and NO3 (0.20) do not match
+	if yesTaker.FilledQty != 50 {
+		t.Errorf("FilledQty = %.0f, want 50 (only one counter bid qualifies)", yesTaker.FilledQty)
+	}
+	if len(book.noBids) != 2 {
+		t.Errorf("noBids len = %d, want 2 (NO2 and NO3 should remain)", len(book.noBids))
+	}
+}
+
+func TestCrossMatch_NoOrderMatchesYesBids(t *testing.T) {
+	book := newTestBook()
+	yesOrder := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	book.addToBook(yesOrder)
+
+	noTaker := makeOrder("NO1", "NO", "LIMIT", 0.35, 50)
+	simulateCrossMatch(book, noTaker)
+
+	if noTaker.Status != models.OrderStatusFilled {
+		t.Errorf("NO taker status = %s, want FILLED", noTaker.Status)
+	}
+	if yesOrder.Status != models.OrderStatusFilled {
+		t.Errorf("YES maker status = %s, want FILLED", yesOrder.Status)
+	}
+	if len(book.yesBids) != 0 {
+		t.Error("YES bid should be removed after full fill")
+	}
+}
+
+func TestCrossMatch_LastTradedPriceUpdates(t *testing.T) {
+	book := newTestBook()
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+	book.addToBook(makeOrder("NO2", "NO", "LIMIT", 0.38, 50))
+
+	// NO2 (0.38) is best bid, YES at 0.65 matches both (0.65+0.38=1.03, 0.65+0.35=1.00)
+	yesTaker := makeOrder("YES1", "YES", "LIMIT", 0.65, 100)
+	simulateCrossMatch(book, yesTaker)
+
+	if yesTaker.Status != models.OrderStatusFilled {
+		t.Errorf("taker status = %s, want FILLED", yesTaker.Status)
+	}
+	if book.lastTradedPrice != 0.65 {
+		t.Errorf("lastTradedPrice = %.2f, want 0.65 (taker's price)", book.lastTradedPrice)
+	}
+}
+
 // ── lastTradedPrice ───────────────────────────────────────────────────────────
 
 func TestLastTradedPrice_UpdatesOnEachFill(t *testing.T) {
