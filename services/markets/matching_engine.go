@@ -2,6 +2,7 @@ package markets
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -440,6 +441,7 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 }
 
 func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID string) {
+	fillID := fmt.Sprintf("%s+%s@%.2f", taker.ID[:8], maker.ID[:8], qty)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -471,17 +473,17 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		log.Printf("[Engine] CrossFill: PG fill update failed for maker %s: %v", maker.ID, err)
 	}
 
-	log.Printf("[Engine] CrossFill: deducting locked balance — taker=%s amount=%.4f maker=%s amount=%.4f",
-		taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)
+	log.Printf("[Engine] CrossFill[%s]: deducting — taker=%s amount=%.4f maker=%s amount=%.4f",
+		fillID, taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*taker.Price); err != nil {
-		log.Printf("[Engine] CrossFill: failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
+		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for taker %s: %v", fillID, taker.UserEmail, err)
 	} else {
-		log.Printf("[Engine] CrossFill: locked balance deducted for taker %s", taker.UserEmail)
+		log.Printf("[Engine] CrossFill[%s]: locked balance deducted for taker %s", fillID, taker.UserEmail)
 	}
 	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*maker.Price); err != nil {
-		log.Printf("[Engine] CrossFill: failed to deduct locked balance for maker %s: %v", maker.UserEmail, err)
+		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for maker %s: %v", fillID, maker.UserEmail, err)
 	} else {
-		log.Printf("[Engine] CrossFill: locked balance deducted for maker %s", maker.UserEmail)
+		log.Printf("[Engine] CrossFill[%s]: locked balance deducted for maker %s", fillID, maker.UserEmail)
 	}
 
 	if _, err := UpsertPosition(ctx, UpsertPositionInput{
@@ -492,7 +494,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		FillPrice:     taker.Price,
 		QuoteCurrency: market.QuoteCurrency,
 	}); err != nil {
-		log.Printf("[Engine] CrossFill: failed to upsert taker position for %s: %v", taker.UserEmail, err)
+		log.Printf("[Engine] CrossFill[%s]: failed to upsert taker position for %s: %v", fillID, taker.UserEmail, err)
 	}
 
 	if _, err := UpsertPosition(ctx, UpsertPositionInput{
@@ -503,7 +505,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		FillPrice:     maker.Price,
 		QuoteCurrency: market.QuoteCurrency,
 	}); err != nil {
-		log.Printf("[Engine] CrossFill: failed to upsert maker position for %s: %v", maker.UserEmail, err)
+		log.Printf("[Engine] CrossFill[%s]: failed to upsert maker position for %s: %v", fillID, maker.UserEmail, err)
 	}
 
 	BroadcastOrderbookUpdate(marketID, "FILL", map[string]interface{}{

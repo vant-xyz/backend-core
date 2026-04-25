@@ -9,10 +9,7 @@ info:
     Pass it as: `Authorization: Bearer <token>`
 
     ## API Key
-    When the server has `API_MASTER_KEY` configured, every request (except `GET /health`
-    and `GET /docs*`) must include the header `X-API-Key: <key>`. Requests without a
-    valid key receive `401 Unauthorized`. If `API_MASTER_KEY` is not set the middleware
-    is disabled and no key is required.
+    All endpoints require the `X-API-Key` header. Requests without a valid key receive `401 Unauthorized`.
 
     ## Admin Endpoints
     Admin routes require the `X-Admin-Key` header instead of JWT.
