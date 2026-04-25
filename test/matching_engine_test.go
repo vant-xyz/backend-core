@@ -258,3 +258,350 @@ func TestCrossMatch_IncompatiblePrices_OrdersRest_NotFilled(t *testing.T) {
 		t.Errorf("Alice should have no positions (no fill), got %d", n)
 	}
 }
+
+// ── Partial fill ──────────────────────────────────────────────────────────────
+
+func TestPartialFill_SmallNoFillsPartOfLargeYes(t *testing.T) {
+	// YES 100 × NO 50 at crossing prices → NO fully filled, YES partially filled
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 200.0)
+	bob := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	aliceOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 100,
+	})
+	if err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+
+	bobOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 50,
+	})
+	if err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	aliceStatus, aliceFilled, aliceRemaining := getOrderStatus(t, aliceOrder.ID)
+	bobStatus, bobFilled, bobRemaining := getOrderStatus(t, bobOrder.ID)
+
+	if aliceStatus != "PARTIALLY_FILLED" {
+		t.Errorf("Alice status = %s, want PARTIALLY_FILLED", aliceStatus)
+	}
+	if aliceFilled != 50 {
+		t.Errorf("Alice filled_qty = %.0f, want 50", aliceFilled)
+	}
+	if aliceRemaining != 50 {
+		t.Errorf("Alice remaining_qty = %.0f, want 50", aliceRemaining)
+	}
+
+	if bobStatus != "FILLED" {
+		t.Errorf("Bob status = %s, want FILLED", bobStatus)
+	}
+	if bobFilled != 50 {
+		t.Errorf("Bob filled_qty = %.0f, want 50", bobFilled)
+	}
+	if bobRemaining != 0 {
+		t.Errorf("Bob remaining_qty = %.0f, want 0", bobRemaining)
+	}
+}
+
+func TestPartialFill_LockedBalanceReflectsUnfilledPortion(t *testing.T) {
+	// After partial fill: alice's locked = price × remaining_qty only
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 200.0)
+	bob := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 100,
+	}); err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 50,
+	}); err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	_, aliceLocked := getBalance(t, alice)
+	_, bobLocked := getBalance(t, bob)
+
+	// Alice locked 100×0.65=$65, 50 filled → deducted $32.50 → remaining locked=$32.50
+	if aliceLocked != 32.50 {
+		t.Errorf("Alice locked after partial fill = %.2f, want 32.50", aliceLocked)
+	}
+	// Bob fully filled — locked fully deducted
+	if bobLocked != 0 {
+		t.Errorf("Bob locked after full fill = %.2f, want 0", bobLocked)
+	}
+}
+
+// ── Cancel order ──────────────────────────────────────────────────────────────
+
+func TestCancelOrder_OpenOrder_ReturnsLockedBalance(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	order, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.60, Quantity: 50, // locks $30
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	_, lockedAfterPlace := getBalance(t, alice)
+	if lockedAfterPlace != 30.0 {
+		t.Errorf("locked after place = %.2f, want 30.00", lockedAfterPlace)
+	}
+
+	if err := marketsvc.CancelOrder(ctx, order.ID, alice); err != nil {
+		t.Fatalf("CancelOrder: %v", err)
+	}
+
+	naira, lockedAfterCancel := getBalance(t, alice)
+	if lockedAfterCancel != 0 {
+		t.Errorf("locked after cancel = %.2f, want 0", lockedAfterCancel)
+	}
+	if naira != 100.0 {
+		t.Errorf("available after cancel = %.2f, want 100.00 (full refund)", naira)
+	}
+
+	status, _, _ := getOrderStatus(t, order.ID)
+	if status != "CANCELLED" {
+		t.Errorf("order status = %s, want CANCELLED", status)
+	}
+}
+
+func TestCancelOrder_PartiallyFilled_RefundsRemainingOnly(t *testing.T) {
+	// Place YES 100, cross-fill 50, cancel remainder → refund = 50×0.65 = $32.50
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 200.0)
+	bob := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	aliceOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 100,
+	})
+	if err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 50,
+	}); err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	if err := marketsvc.CancelOrder(ctx, aliceOrder.ID, alice); err != nil {
+		t.Fatalf("CancelOrder after partial fill: %v", err)
+	}
+
+	naira, locked := getBalance(t, alice)
+	// Started $200, locked $65 (100×0.65), 50 filled → $32.50 deducted.
+	// Cancel refunds remaining $32.50 → available = $200 - $32.50 = $167.50.
+	if locked != 0 {
+		t.Errorf("locked after cancel = %.2f, want 0", locked)
+	}
+	if naira != 167.50 {
+		t.Errorf("available after partial fill + cancel = %.2f, want 167.50", naira)
+	}
+
+	status, _, _ := getOrderStatus(t, aliceOrder.ID)
+	if status != "CANCELLED" {
+		t.Errorf("order status = %s, want CANCELLED", status)
+	}
+}
+
+func TestCancelOrder_AlreadyFilled_ReturnsError(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 100.0)
+	bob := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	aliceOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 50,
+	})
+	if err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 50,
+	}); err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	if err := marketsvc.CancelOrder(ctx, aliceOrder.ID, alice); err == nil {
+		t.Error("CancelOrder on FILLED order should return error")
+	}
+}
+
+// ── Placement validation ──────────────────────────────────────────────────────
+
+func TestPlaceOrder_InsufficientBalance_ReturnsError(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 10.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	// Order cost = 0.60 × 50 = $30 — exceeds $10 balance
+	_, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.60, Quantity: 50,
+	})
+	if err == nil {
+		t.Error("PlaceOrder with insufficient balance should return error")
+	}
+
+	_, locked := getBalance(t, alice)
+	if locked != 0 {
+		t.Errorf("locked after failed order = %.2f, want 0", locked)
+	}
+}
+
+func TestPlaceOrder_WrongOwner_CancelFails(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 100.0)
+	eve := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	order, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.60, Quantity: 10,
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	if err := marketsvc.CancelOrder(ctx, order.ID, eve); err == nil {
+		t.Error("CancelOrder by non-owner should return error")
+	}
+}
+
+// ── Multi-order fill ──────────────────────────────────────────────────────────
+
+func TestMultiOrderFill_OneNoFillsMultipleYes(t *testing.T) {
+	// Two YES orders (50 each) rest in book. One NO 100 arrives and fills both.
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 100.0)
+	bob := createTestUser(t, 100.0)
+	charlie := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+
+	ctx := context.Background()
+
+	aliceOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 50,
+	})
+	if err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	bobOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.60, Quantity: 50,
+	})
+	if err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	// Charlie: NO 100 @ 0.35 — crosses both YES bids (0.65+0.35≥1, 0.60+0.35<1)
+	// Only alice's YES (0.65) crosses; bob's YES (0.60) does not (0.60+0.35=0.95<1.00)
+	charlieOrder, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: charlie, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 100,
+	})
+	if err != nil {
+		t.Fatalf("Charlie PlaceOrder: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	aliceStatus, aliceFilled, _ := getOrderStatus(t, aliceOrder.ID)
+	bobStatus, _, _ := getOrderStatus(t, bobOrder.ID)
+	charlieStatus, charlieFilled, charlieRemaining := getOrderStatus(t, charlieOrder.ID)
+
+	// Alice YES@0.65 + Charlie NO@0.35 = 1.00 → fills 50
+	if aliceStatus != "FILLED" {
+		t.Errorf("Alice status = %s, want FILLED", aliceStatus)
+	}
+	if aliceFilled != 50 {
+		t.Errorf("Alice filled_qty = %.0f, want 50", aliceFilled)
+	}
+
+	// Bob YES@0.60 + Charlie NO@0.35 = 0.95 < 1.00 → no cross-match
+	if bobStatus != "OPEN" {
+		t.Errorf("Bob status = %s, want OPEN (0.60+0.35=0.95<1.00)", bobStatus)
+	}
+
+	// Charlie filled 50 (against alice only), 50 remaining
+	if charlieStatus != "PARTIALLY_FILLED" {
+		t.Errorf("Charlie status = %s, want PARTIALLY_FILLED", charlieStatus)
+	}
+	if charlieFilled != 50 {
+		t.Errorf("Charlie filled_qty = %.0f, want 50", charlieFilled)
+	}
+	if charlieRemaining != 50 {
+		t.Errorf("Charlie remaining_qty = %.0f, want 50", charlieRemaining)
+	}
+}
