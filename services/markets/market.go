@@ -199,6 +199,19 @@ func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) err
 
 	log.Printf("[Markets] SettleCAPPM complete: id=%s outcome=%s endPrice=%d tx=%s",
 		marketID, outcome, endPriceCents, txHash)
+
+	go func() {
+		pCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		result, err := ProcessMarketSettlement(pCtx, marketID, outcome)
+		if err != nil {
+			log.Printf("[Markets] CAPPM payout distribution failed for %s: %v", marketID, err)
+			return
+		}
+		log.Printf("[Markets] CAPPM payouts distributed: market=%s winners=%d losers=%d payout=%.2f refunds=%d",
+			marketID, result.WinningCount, result.LosingCount, result.TotalPayout, result.RefundedOrders)
+	}()
+
 	return nil
 }
 
