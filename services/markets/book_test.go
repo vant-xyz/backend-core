@@ -421,6 +421,119 @@ func TestFillMath_FillPriceIsAlwaysMakerPrice(t *testing.T) {
 	}
 }
 
+// simulateLimitOrder mirrors the full executeLimitOrder flow:
+// same-side ask matching → cross-side matching → rest in book.
+// No goroutines, no DB.
+func simulateLimitOrder(book *marketBook, order *models.Order) {
+	simulateLimitFill(book, order)
+	if order.RemainingQty == 0 {
+		return
+	}
+	simulateCrossMatch(book, order)
+	if order.RemainingQty == 0 {
+		return
+	}
+	book.addToBook(order)
+}
+
+// ── executeLimitOrder integration ────────────────────────────────────────────
+
+func TestLimitOrder_NoCounterParty_RestsInBook(t *testing.T) {
+	book := newTestBook()
+	order := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	simulateLimitOrder(book, order)
+
+	if len(book.yesBids) != 1 {
+		t.Fatalf("expected order in yesBids, got %d entries", len(book.yesBids))
+	}
+	if order.FilledQty != 0 {
+		t.Errorf("FilledQty = %.0f, want 0", order.FilledQty)
+	}
+	if order.Status != models.OrderStatusOpen {
+		t.Errorf("status = %s, want OPEN", order.Status)
+	}
+}
+
+func TestLimitOrder_CrossMatchFills_DoesNotAddToBook(t *testing.T) {
+	book := newTestBook()
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+
+	yes := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	simulateLimitOrder(book, yes)
+
+	if yes.Status != models.OrderStatusFilled {
+		t.Errorf("status = %s, want FILLED", yes.Status)
+	}
+	if len(book.yesBids) != 0 {
+		t.Errorf("filled order should not rest in book, got %d yesBids", len(book.yesBids))
+	}
+	if len(book.noBids) != 0 {
+		t.Errorf("matched NO bid should be gone, got %d noBids", len(book.noBids))
+	}
+}
+
+func TestLimitOrder_PartialCrossMatch_RestsRemainder(t *testing.T) {
+	book := newTestBook()
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 30))
+
+	yes := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	simulateLimitOrder(book, yes)
+
+	// 30 cross-filled, 20 rests in yesBids
+	if yes.FilledQty != 30 {
+		t.Errorf("FilledQty = %.0f, want 30", yes.FilledQty)
+	}
+	if yes.RemainingQty != 20 {
+		t.Errorf("RemainingQty = %.0f, want 20", yes.RemainingQty)
+	}
+	if yes.Status != models.OrderStatusPartiallyFilled {
+		t.Errorf("status = %s, want PARTIALLY_FILLED", yes.Status)
+	}
+	if len(book.yesBids) != 1 {
+		t.Errorf("remainder should rest in yesBids, got %d entries", len(book.yesBids))
+	}
+	if book.yesBids[0].order.RemainingQty != 20 {
+		t.Errorf("resting qty = %.0f, want 20", book.yesBids[0].order.RemainingQty)
+	}
+}
+
+func TestLimitOrder_SameSideAskFillsThenCrossMatchNotNeeded(t *testing.T) {
+	book := newTestBook()
+	// Inject a same-side ask directly (unusual but valid path)
+	book.yesAsks = []*engineOrder{
+		{order: makeOrder("ASK1", "YES", "LIMIT", 0.60, 50), createdAt: makeOrder("ASK1", "YES", "LIMIT", 0.60, 50).CreatedAt},
+	}
+
+	yes := makeOrder("YES1", "YES", "LIMIT", 0.65, 50)
+	simulateLimitOrder(book, yes)
+
+	if yes.Status != models.OrderStatusFilled {
+		t.Errorf("status = %s, want FILLED (filled via same-side ask)", yes.Status)
+	}
+	if len(book.yesBids) != 0 {
+		t.Errorf("fully filled order should not rest in book")
+	}
+}
+
+func TestLimitOrder_PriceIncompatible_RestsWithoutFill(t *testing.T) {
+	book := newTestBook()
+	// NO bid at 0.30 — YES at 0.60 sums to 0.90, no match
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.30, 50))
+
+	yes := makeOrder("YES1", "YES", "LIMIT", 0.60, 50)
+	simulateLimitOrder(book, yes)
+
+	if yes.FilledQty != 0 {
+		t.Errorf("FilledQty = %.0f, want 0", yes.FilledQty)
+	}
+	if len(book.yesBids) != 1 {
+		t.Errorf("order should rest in yesBids, got %d", len(book.yesBids))
+	}
+	if len(book.noBids) != 1 {
+		t.Errorf("unmatched NO bid should remain, got %d", len(book.noBids))
+	}
+}
+
 // ── cross-side matching ───────────────────────────────────────────────────────
 //
 // simulateCrossMatch mirrors executeCrossMatch/executeCrossFill without the
