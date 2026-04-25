@@ -31,7 +31,7 @@ type privatePaymentReq struct {
 }
 
 type privatePaymentResp struct {
-	Transaction          string   `json:"transaction"`
+	Transaction          string   `json:"transactionBase64"`
 	RequiredSigners      []string `json:"requiredSigners"`
 	SendTo               string   `json:"sendTo"`
 	RecentBlockhash      string   `json:"recentBlockhash"`
