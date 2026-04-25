@@ -221,6 +221,14 @@ func (b *marketBook) executeLimitOrder(order *models.Order) {
 	if order.FilledQty > 0 {
 		order.Status = models.OrderStatusPartiallyFilled
 	}
+	b.executeCrossMatch(order)
+	if order.RemainingQty == 0 {
+		go persistOrderFill(order)
+		return
+	}
+	if order.FilledQty > 0 {
+		order.Status = models.OrderStatusPartiallyFilled
+	}
 	b.addToBook(order)
 	go persistOrderFill(order)
 }
@@ -239,6 +247,45 @@ func (b *marketBook) executeFill(taker, maker *models.Order, qty, price float64)
 	log.Printf("[Engine] Fill: market=%s taker=%s maker=%s qty=%.2f price=%.2f",
 		b.marketID, taker.ID, maker.ID, qty, price)
 	go persistFillAsync(taker, maker, qty, price, b.marketID)
+}
+
+func (b *marketBook) executeCrossMatch(order *models.Order) {
+	var counterBids *[]*engineOrder
+	if order.Side == models.OrderSideYes {
+		counterBids = &b.noBids
+	} else {
+		counterBids = &b.yesBids
+	}
+	i := 0
+	for i < len(*counterBids) && order.RemainingQty > 0 {
+		counter := (*counterBids)[i]
+		if order.Price+counter.order.Price < 1.0-1e-9 {
+			break
+		}
+		fillQty := min64(order.RemainingQty, counter.order.RemainingQty)
+		b.executeCrossFill(order, counter.order, fillQty)
+		if counter.order.RemainingQty == 0 {
+			*counterBids = append((*counterBids)[:i], (*counterBids)[i+1:]...)
+		} else {
+			i++
+		}
+	}
+}
+
+func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
+	taker.FilledQty += qty
+	taker.RemainingQty -= qty
+	maker.FilledQty += qty
+	maker.RemainingQty -= qty
+	if maker.RemainingQty == 0 {
+		maker.Status = models.OrderStatusFilled
+	} else {
+		maker.Status = models.OrderStatusPartiallyFilled
+	}
+	b.lastTradedPrice = taker.Price
+	log.Printf("[Engine] CrossFill: market=%s taker=%s(%s@%.2f) maker=%s(%s@%.2f) qty=%.2f",
+		b.marketID, taker.ID, taker.Side, taker.Price, maker.ID, maker.Side, maker.Price, qty)
+	go persistCrossFillAsync(taker, maker, qty, b.marketID)
 }
 
 func (b *marketBook) addToBook(order *models.Order) {
@@ -384,6 +431,71 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 		"price": price,
 		"qty":   qty,
 		"side":  taker.Side,
+	})
+}
+
+func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	market, err := db.GetMarketByID(ctx, marketID)
+	if err != nil {
+		log.Printf("[Engine] CrossFill: failed to fetch market %s: %v", marketID, err)
+		return
+	}
+
+	takerStatus := models.OrderStatusPartiallyFilled
+	if taker.RemainingQty == 0 {
+		takerStatus = models.OrderStatusFilled
+	}
+	if err := db.RedisUpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
+		log.Printf("[Engine] CrossFill: Redis fill update failed for taker %s: %v", taker.ID, err)
+	}
+	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
+
+	makerStatus := models.OrderStatusPartiallyFilled
+	if maker.RemainingQty == 0 {
+		makerStatus = models.OrderStatusFilled
+	}
+	if err := db.RedisUpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
+		log.Printf("[Engine] CrossFill: Redis fill update failed for maker %s: %v", maker.ID, err)
+	}
+	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
+
+	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*taker.Price); err != nil {
+		log.Printf("[Engine] CrossFill: failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
+	}
+	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*maker.Price); err != nil {
+		log.Printf("[Engine] CrossFill: failed to deduct locked balance for maker %s: %v", maker.UserEmail, err)
+	}
+
+	if _, err := UpsertPosition(ctx, UpsertPositionInput{
+		UserEmail:     taker.UserEmail,
+		MarketID:      marketID,
+		Side:          taker.Side,
+		Shares:        qty,
+		FillPrice:     taker.Price,
+		QuoteCurrency: market.QuoteCurrency,
+	}); err != nil {
+		log.Printf("[Engine] CrossFill: failed to upsert taker position for %s: %v", taker.UserEmail, err)
+	}
+
+	if _, err := UpsertPosition(ctx, UpsertPositionInput{
+		UserEmail:     maker.UserEmail,
+		MarketID:      marketID,
+		Side:          maker.Side,
+		Shares:        qty,
+		FillPrice:     maker.Price,
+		QuoteCurrency: market.QuoteCurrency,
+	}); err != nil {
+		log.Printf("[Engine] CrossFill: failed to upsert maker position for %s: %v", maker.UserEmail, err)
+	}
+
+	BroadcastOrderbookUpdate(marketID, "FILL", map[string]interface{}{
+		"taker_price": taker.Price,
+		"maker_price": maker.Price,
+		"qty":         qty,
+		"taker_side":  taker.Side,
 	})
 }
 
