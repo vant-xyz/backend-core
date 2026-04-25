@@ -51,7 +51,7 @@ func UpdateOrderFill(ctx context.Context, orderID string, filledQty, remainingQt
 	_, err := Pool.Exec(ctx, `
 		UPDATE orders
 		SET filled_qty = $1, remaining_qty = $2, status = $3, updated_at = NOW()
-		WHERE id = $4
+		WHERE id = $4 AND status NOT IN ('FILLED', 'CANCELLED')
 	`, filledQty, remainingQty, string(status), orderID)
 	return err
 }
