@@ -28,6 +28,14 @@ type privatePaymentReq struct {
 	FromBalance   string `json:"fromBalance"`
 	ToBalance     string `json:"toBalance"`
 	Visibility    string `json:"visibility"`
+	Cluster       string `json:"cluster,omitempty"`
+}
+
+func getCluster() string {
+	if c := os.Getenv("SOLANA_CLUSTER"); c != "" {
+		return c
+	}
+	return "devnet"
 }
 
 type privatePaymentResp struct {
@@ -70,6 +78,7 @@ func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, rec
 		FromBalance: "base",
 		ToBalance:   "base",
 		Visibility:  "private",
+		Cluster:     getCluster(),
 	}
 
 	body, err := json.Marshal(reqBody)
