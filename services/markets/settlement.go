@@ -51,7 +51,7 @@ func ProcessMarketSettlement(ctx context.Context, marketID string, outcome model
 		return nil, fmt.Errorf("failed to calculate payouts: %w", err)
 	}
 
-	totalPayout, winCount, loseCount, err := DistributePayouts(ctx, payouts)
+	totalPayout, winCount, loseCount, err := DistributePayouts(ctx, payouts, outcome)
 	if err != nil {
 		return nil, fmt.Errorf("failed to distribute payouts: %w", err)
 	}
@@ -163,7 +163,7 @@ func CalculatePayouts(ctx context.Context, marketID string, outcome models.Marke
 	return payouts, nil
 }
 
-func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float64, winCount, loseCount int, err error) {
+func DistributePayouts(ctx context.Context, payouts []Payout, outcome models.MarketOutcome) (totalPayout float64, winCount, loseCount int, err error) {
 	for i := range payouts {
 		payout := &payouts[i]
 
@@ -177,12 +177,7 @@ func DistributePayouts(ctx context.Context, payouts []Payout) (totalPayout float
 			continue
 		}
 
-		outcomeForPosition := models.OutcomeNo
-		if payout.PayoutAmount > 0 {
-			outcomeForPosition = models.OutcomeYes
-		}
-
-		if err := SettlePosition(ctx, payout.PositionID, outcomeForPosition); err != nil {
+		if err := SettlePosition(ctx, payout.PositionID, outcome); err != nil {
 			log.Printf("[Settlement] CRITICAL: failed to settle position %s for user %s: %v",
 				payout.PositionID, payout.UserEmail, err)
 			continue
