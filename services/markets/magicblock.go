@@ -120,9 +120,11 @@ func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, rec
 		return "", fmt.Errorf("sign private payment tx: %w", err)
 	}
 
-	rpcURLs := getFallbackRPCURLs()
+	var rpcURLs []string
 	if payResp.SendTo == "ephemeral" {
 		rpcURLs = []string{getEphemeralRPCURL()}
+	} else {
+		rpcURLs = append([]string{"https://devnet-router.magicblock.app"}, getFallbackRPCURLs()...)
 	}
 
 	for _, rpcURL := range rpcURLs {
