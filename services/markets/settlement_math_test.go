@@ -6,9 +6,6 @@ import (
 	"github.com/vant-xyz/backend-code/models"
 )
 
-// Payout and PnL formulas extracted from settlement.go and position.go
-// for deterministic testing without DB.
-
 func calcPayout(shares float64, won bool) float64 {
 	if won {
 		return shares * payoutPerWinningShare
@@ -36,9 +33,9 @@ func positionWon(side models.OrderSide, outcome models.MarketOutcome) bool {
 
 // ── payout per share constant ─────────────────────────────────────────────────
 
-func TestPayoutPerWinningShare_Is100(t *testing.T) {
-	if payoutPerWinningShare != 100.0 {
-		t.Errorf("payoutPerWinningShare = %.2f, want 100.00", payoutPerWinningShare)
+func TestPayoutPerWinningShare_Is1(t *testing.T) {
+	if payoutPerWinningShare != 1.0 {
+		t.Errorf("payoutPerWinningShare = %.2f, want 1.00 ($1 USD per share)", payoutPerWinningShare)
 	}
 }
 
@@ -71,10 +68,10 @@ func TestCalcPayout_WinnerGetsSharesTimesPayout(t *testing.T) {
 		shares float64
 		want   float64
 	}{
-		{1, 100},
-		{10, 1000},
-		{2.5, 250},
-		{0.5, 50},
+		{1, 1},
+		{10, 10},
+		{2.5, 2.5},
+		{50, 50},
 	}
 	for _, tc := range cases {
 		got := calcPayout(tc.shares, true)
@@ -94,34 +91,33 @@ func TestCalcPayout_LoserGetsZero(t *testing.T) {
 // ── realized PnL ──────────────────────────────────────────────────────────────
 
 func TestCalcRealizedPnL_WinnerProfit(t *testing.T) {
-	// Bought 100 shares @ $60 avg entry. Payout = $100/share.
-	// Cost = 100 * 60 = 6000. Payout = 100 * 100 = 10000. PnL = 4000.
-	got := calcRealizedPnL(100, 60, true)
-	want := 4000.0
+	// 50 shares @ $0.65 avg entry (YES side). Payout = $1/share = $50. Cost = $32.50. PnL = $17.50.
+	got := calcRealizedPnL(50, 0.65, true)
+	want := 17.5
 	if got != want {
-		t.Errorf("PnL for 100 shares @60 winner = %.2f, want %.2f", got, want)
+		t.Errorf("PnL for 50 shares @0.65 winner = %.2f, want %.2f", got, want)
 	}
 }
 
 func TestCalcRealizedPnL_LowEntryHigherProfit(t *testing.T) {
-	// 50 shares @ $20 entry. Payout = 5000. Cost = 1000. PnL = 4000.
-	got := calcRealizedPnL(50, 20, true)
-	want := 4000.0
+	// 50 shares @ $0.20 entry. Payout = $50. Cost = $10. PnL = $40.
+	got := calcRealizedPnL(50, 0.20, true)
+	want := 40.0
 	if got != want {
 		t.Errorf("PnL = %.2f, want %.2f", got, want)
 	}
 }
 
 func TestCalcRealizedPnL_LoserIsAlwaysZero(t *testing.T) {
-	got := calcRealizedPnL(200, 40, false)
+	got := calcRealizedPnL(200, 0.40, false)
 	if got != 0 {
 		t.Errorf("loser PnL = %.2f, want 0", got)
 	}
 }
 
-func TestCalcRealizedPnL_BreakEvenAt100EntryPrice(t *testing.T) {
-	// Bought at exactly $100 per share → payout == cost → PnL = 0.
-	got := calcRealizedPnL(10, 100, true)
+func TestCalcRealizedPnL_BreakEvenAtFullEntryPrice(t *testing.T) {
+	// Bought at exactly $1.00 per share → payout == cost → PnL = 0.
+	got := calcRealizedPnL(10, 1.0, true)
 	want := 0.0
 	if got != want {
 		t.Errorf("break-even PnL = %.2f, want 0.00", got)
@@ -131,56 +127,54 @@ func TestCalcRealizedPnL_BreakEvenAt100EntryPrice(t *testing.T) {
 // ── avg entry price ───────────────────────────────────────────────────────────
 
 func TestAvgEntry_FirstPosition(t *testing.T) {
-	// First fill: avg entry IS the fill price.
-	got := calcAvgEntry(0, 0, 100, 60)
-	if got != 60 {
-		t.Errorf("avg entry for fresh position = %.2f, want 60", got)
+	got := calcAvgEntry(0, 0, 100, 0.60)
+	if got != 0.60 {
+		t.Errorf("avg entry for fresh position = %.2f, want 0.60", got)
 	}
 }
 
 func TestAvgEntry_SecondFillSamePrice(t *testing.T) {
-	// Same price both fills → avg stays same.
-	got := calcAvgEntry(100, 60, 50, 60)
-	if got != 60 {
-		t.Errorf("avg entry with same fill price = %.2f, want 60", got)
+	got := calcAvgEntry(100, 0.60, 50, 0.60)
+	if got != 0.60 {
+		t.Errorf("avg entry with same fill price = %.2f, want 0.60", got)
 	}
 }
 
 func TestAvgEntry_SecondFillHigherPrice(t *testing.T) {
-	// 100 shares @ 60, then 50 more @ 90.
-	// Weighted avg = (100*60 + 50*90) / 150 = (6000 + 4500) / 150 = 70.
-	got := calcAvgEntry(100, 60, 50, 90)
-	want := 70.0
+	// 100 shares @ 0.60, then 50 more @ 0.90.
+	// Weighted avg = (100*0.60 + 50*0.90) / 150 = (60 + 45) / 150 = 0.70.
+	got := calcAvgEntry(100, 0.60, 50, 0.90)
+	want := 0.70
 	if got != want {
 		t.Errorf("avg entry = %.4f, want %.4f", got, want)
 	}
 }
 
 func TestAvgEntry_SecondFillLowerPrice(t *testing.T) {
-	// 100 shares @ 80, then 100 more @ 60.
-	// Weighted avg = (100*80 + 100*60) / 200 = (8000 + 6000) / 200 = 70.
-	got := calcAvgEntry(100, 80, 100, 60)
-	want := 70.0
+	// 100 shares @ 0.80, then 100 more @ 0.60.
+	// Weighted avg = (100*0.80 + 100*0.60) / 200 = (80 + 60) / 200 = 0.70.
+	got := calcAvgEntry(100, 0.80, 100, 0.60)
+	want := 0.70
 	if got != want {
 		t.Errorf("avg entry = %.4f, want %.4f", got, want)
 	}
 }
 
 func TestAvgEntry_SmallFillDoesNotSkewMuch(t *testing.T) {
-	// 1000 shares @ 50, then 1 more @ 100.
-	// Weighted avg = (1000*50 + 1*100) / 1001 = 50100/1001 ≈ 50.05.
-	got := calcAvgEntry(1000, 50, 1, 100)
-	want := 50100.0 / 1001.0
+	// 1000 shares @ 0.50, then 1 more @ 1.00.
+	// Weighted avg = (1000*0.50 + 1*1.00) / 1001 = 501/1001 ≈ 0.500499.
+	got := calcAvgEntry(1000, 0.50, 1, 1.00)
+	want := 501.0 / 1001.0
 	if abs(got-want) > 0.0001 {
 		t.Errorf("avg entry = %.6f, want %.6f", got, want)
 	}
 }
 
 func TestAvgEntry_FractionalShares(t *testing.T) {
-	// 2.5 shares @ 40, then 2.5 more @ 60.
-	// Weighted avg = (2.5*40 + 2.5*60) / 5 = (100 + 150) / 5 = 50.
-	got := calcAvgEntry(2.5, 40, 2.5, 60)
-	want := 50.0
+	// 2.5 shares @ 0.40, then 2.5 more @ 0.60.
+	// Weighted avg = (2.5*0.40 + 2.5*0.60) / 5 = (1.0 + 1.5) / 5 = 0.50.
+	got := calcAvgEntry(2.5, 0.40, 2.5, 0.60)
+	want := 0.50
 	if got != want {
 		t.Errorf("avg entry fractional = %.4f, want %.4f", got, want)
 	}
@@ -196,9 +190,9 @@ func TestTotalPayout_MultipleMixedPositions(t *testing.T) {
 	}
 
 	positions := []pos{
-		{100, models.OrderSideYes, 60},
-		{50, models.OrderSideNo, 45},
-		{200, models.OrderSideYes, 30},
+		{100, models.OrderSideYes, 0.60},
+		{50, models.OrderSideNo, 0.45},
+		{200, models.OrderSideYes, 0.30},
 	}
 	outcome := models.OutcomeYes
 
@@ -208,9 +202,9 @@ func TestTotalPayout_MultipleMixedPositions(t *testing.T) {
 		totalPayout += calcPayout(p.shares, won)
 	}
 
-	// YES positions win: 100 + 200 = 300 shares * 100 = 30000.
+	// YES positions win: 100 + 200 = 300 shares × $1.00 = $300.
 	// NO position loses: 0.
-	want := 30000.0
+	want := 300.0
 	if totalPayout != want {
 		t.Errorf("total payout = %.2f, want %.2f", totalPayout, want)
 	}

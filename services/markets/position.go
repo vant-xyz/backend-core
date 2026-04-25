@@ -12,7 +12,7 @@ import (
 	"github.com/vant-xyz/backend-code/utils"
 )
 
-const payoutPerWinningShare = 100.0
+const payoutPerWinningShare = 1.0
 
 type UpsertPositionInput struct {
 	UserEmail     string
