@@ -114,7 +114,7 @@ func TestCrossMatch_BothOrdersFilled_InDB(t *testing.T) {
 	}
 
 	// Give goroutines time to persist to DB
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	aliceStatus, aliceFilled, aliceRemaining := getOrderStatus(t, aliceOrder.ID)
 	bobStatus, bobFilled, bobRemaining := getOrderStatus(t, bobOrder.ID)
@@ -165,7 +165,7 @@ func TestCrossMatch_PositionsCreated_InDB(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	if n := getPositionCount(t, alice, marketID); n != 1 {
 		t.Errorf("Alice active positions = %d, want 1", n)
@@ -200,7 +200,7 @@ func TestCrossMatch_LockedBalanceDeducted_InDB(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	// After cross-fill: locked balance is deducted (consumed, not returned)
 	_, aliceLocked := getBalance(t, alice)
@@ -242,7 +242,7 @@ func TestCrossMatch_IncompatiblePrices_OrdersRest_NotFilled(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	aliceStatus, _, _ := getOrderStatus(t, aliceOrder.ID)
 	bobStatus, _, _ := getOrderStatus(t, bobOrder.ID)
@@ -290,7 +290,7 @@ func TestPartialFill_SmallNoFillsPartOfLargeYes(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	aliceStatus, aliceFilled, aliceRemaining := getOrderStatus(t, aliceOrder.ID)
 	bobStatus, bobFilled, bobRemaining := getOrderStatus(t, bobOrder.ID)
@@ -342,7 +342,7 @@ func TestPartialFill_LockedBalanceReflectsUnfilledPortion(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	_, aliceLocked := getBalance(t, alice)
 	_, bobLocked := getBalance(t, bob)
@@ -381,6 +381,8 @@ func TestCancelOrder_OpenOrder_ReturnsLockedBalance(t *testing.T) {
 	if lockedAfterPlace != 30.0 {
 		t.Errorf("locked after place = %.2f, want 30.00", lockedAfterPlace)
 	}
+
+	time.Sleep(200 * time.Millisecond)
 
 	if err := marketsvc.CancelOrder(ctx, order.ID, alice); err != nil {
 		t.Fatalf("CancelOrder: %v", err)
@@ -427,7 +429,7 @@ func TestCancelOrder_PartiallyFilled_RefundsRemainingOnly(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	if err := marketsvc.CancelOrder(ctx, aliceOrder.ID, alice); err != nil {
 		t.Fatalf("CancelOrder after partial fill: %v", err)
@@ -475,7 +477,7 @@ func TestCancelOrder_AlreadyFilled_ReturnsError(t *testing.T) {
 		t.Fatalf("Bob PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	if err := marketsvc.CancelOrder(ctx, aliceOrder.ID, alice); err == nil {
 		t.Error("CancelOrder on FILLED order should return error")
@@ -575,7 +577,7 @@ func TestMultiOrderFill_OneNoFillsMultipleYes(t *testing.T) {
 		t.Fatalf("Charlie PlaceOrder: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	aliceStatus, aliceFilled, _ := getOrderStatus(t, aliceOrder.ID)
 	bobStatus, _, _ := getOrderStatus(t, bobOrder.ID)
