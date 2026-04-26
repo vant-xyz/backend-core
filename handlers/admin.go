@@ -27,6 +27,10 @@ func AdminAuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+func AdminPing(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func ForceSettleMarket(c *gin.Context) {
 	marketID := c.Param("id")
 	if marketID == "" {
