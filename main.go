@@ -99,8 +99,12 @@ func main() {
 	r.POST("/auth/username/exists", handlers.CheckUsername)
 	r.POST("/auth", handlers.Auth)
 
-	r.GET("/internal/wallets", handlers.GetInternalWallets)
-	r.POST("/internal/deposit", handlers.HandleInternalDeposit)
+	internal := r.Group("/internal")
+	internal.Use(handlers.IndexerKeyMiddleware())
+	{
+		internal.GET("/wallets", handlers.GetInternalWallets)
+		internal.POST("/deposit", handlers.HandleInternalDeposit)
+	}
 
 	// ── Markets — public ──────────────────────────────────────────────────────
 	// GET /markets?type=CAPPM&status=active   → crypto tab feed

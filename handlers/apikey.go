@@ -26,3 +26,16 @@ func APIKeyMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// IndexerKeyMiddleware guards /internal/* routes with a separate secret so
+// the public API key cannot be used to credit balances directly.
+func IndexerKeyMiddleware() gin.HandlerFunc {
+	indexerKey := os.Getenv("INDEXER_SECRET_KEY")
+	return func(c *gin.Context) {
+		if indexerKey == "" || c.GetHeader("X-Indexer-Key") != indexerKey {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}
