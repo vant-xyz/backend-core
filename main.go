@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
@@ -60,14 +61,27 @@ func main() {
 		origins = append(origins, o)
 	}
 
-	r.Use(cors.New(cors.Config{
+	corsConfig := cors.Config{
 		AllowOrigins:     origins,
 		AllowMethods:     []string{"POST", "OPTIONS", "GET", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Admin-Key", "X-API-Key"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
-	}))
+	}
+	r.Use(cors.New(corsConfig))
 	r.Use(handlers.APIKeyMiddleware())
+
+	r.NoRoute(func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		for _, o := range origins {
+			if o == origin {
+				c.Header("Access-Control-Allow-Origin", origin)
+				c.Header("Access-Control-Allow-Credentials", "true")
+				break
+			}
+		}
+		c.JSON(http.StatusNotFound, gin.H{"message": "not found"})
+	})
 
 	// ── Docs ──────────────────────────────────────────────────────────────────
 	r.GET("/docs", swaggerUIHandler)
