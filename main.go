@@ -171,6 +171,7 @@ func main() {
 		admin.POST("/markets/:id/sync", handlersmarkets.SyncMarket)
 		admin.POST("/markets/:id/force-settle", handlers.ForceSettleMarket)
 		admin.GET("/markets", handlers.GetAllMarkets)
+		admin.GET("/markets/search", handlers.SearchAdminMarkets)
 		admin.GET("/markets/:id/stats", handlers.GetMarketStats)
 		admin.GET("/orders", handlers.GetAllOrders)
 		admin.GET("/users/:email/exposure", handlers.GetUserExposure)

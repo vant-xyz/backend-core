@@ -132,6 +132,33 @@ func GetMarketsByType(ctx context.Context, marketType models.MarketType) ([]mode
 	return scanMarkets(rows)
 }
 
+func SearchMarkets(ctx context.Context, query string, marketType string) ([]models.Market, error) {
+	q := "%" + query + "%"
+	var rows pgx.Rows
+	var err error
+	if marketType != "" {
+		rows, err = Pool.Query(ctx,
+			`SELECT `+marketColumns+` FROM markets
+			 WHERE market_type = $1 AND (id ILIKE $2 OR creation_tx_hash ILIKE $2 OR settlement_tx_hash ILIKE $2)
+			 ORDER BY status = 'active' DESC, created_at DESC
+			 LIMIT 50`,
+			marketType, q,
+		)
+	} else {
+		rows, err = Pool.Query(ctx,
+			`SELECT `+marketColumns+` FROM markets
+			 WHERE id ILIKE $1 OR creation_tx_hash ILIKE $1 OR settlement_tx_hash ILIKE $1
+			 ORDER BY status = 'active' DESC, created_at DESC
+			 LIMIT 50`,
+			q,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanMarkets(rows)
+}
+
 func GetMarketsByAsset(ctx context.Context, asset string) ([]models.Market, error) {
 	rows, err := Pool.Query(ctx,
 		`SELECT `+marketColumns+` FROM markets WHERE asset = $1 ORDER BY created_at DESC`,

@@ -270,6 +270,25 @@ func GetUserExposure(c *gin.Context) {
 	})
 }
 
+func SearchAdminMarkets(c *gin.Context) {
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "q is required"})
+		return
+	}
+	marketType := c.Query("type")
+
+	markets, err := db.SearchMarkets(c.Request.Context(), query, marketType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Search failed: " + err.Error()})
+		return
+	}
+	if markets == nil {
+		markets = []models.Market{}
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "markets": markets, "count": len(markets)})
+}
+
 func GetAllMarkets(c *gin.Context) {
 	status := c.DefaultQuery("status", "active")
 	marketType := c.Query("type")
