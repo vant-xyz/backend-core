@@ -146,6 +146,7 @@ func main() {
 	admin.Use(handlers.AdminAuthMiddleware())
 	{
 		admin.POST("/markets/gem", handlersmarkets.CreateMarketGEM)
+		admin.POST("/markets/cappm", handlersmarkets.CreateMarketCAPPMAdmin)
 		admin.POST("/markets/:id/settle", handlersmarkets.SettleMarketGEM)
 		admin.POST("/markets/:id/sync", handlersmarkets.SyncMarket)
 		admin.POST("/markets/:id/force-settle", handlers.ForceSettleMarket)
@@ -153,6 +154,8 @@ func main() {
 		admin.GET("/markets/:id/stats", handlers.GetMarketStats)
 		admin.GET("/orders", handlers.GetAllOrders)
 		admin.GET("/users/:email/exposure", handlers.GetUserExposure)
+		admin.GET("/cappm/status", handlers.GetCAPPMStatus)
+		admin.GET("/overview", handlers.GetOverview)
 	}
 
 	port := os.Getenv("PORT")

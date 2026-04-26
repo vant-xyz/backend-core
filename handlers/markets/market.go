@@ -12,11 +12,13 @@ import (
 
 func CreateMarketGEM(c *gin.Context) {
 	var req struct {
-		Title           string `json:"title" binding:"required"`
-		Description     string `json:"description" binding:"required"`
-		DataProvider    string `json:"data_provider" binding:"required"`
-		StartTimeUTC    int64  `json:"start_time_utc" binding:"required"`
-		DurationSeconds uint64 `json:"duration_seconds" binding:"required"`
+		Title             string `json:"title" binding:"required"`
+		Description       string `json:"description" binding:"required"`
+		DataProvider      string `json:"data_provider" binding:"required"`
+		StartTimeUTC      int64  `json:"start_time_utc" binding:"required"`
+		DurationSeconds   uint64 `json:"duration_seconds" binding:"required"`
+		MarketImageSmall  string `json:"market_image_small"`
+		MarketImageBanner string `json:"market_image_banner"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
@@ -24,11 +26,13 @@ func CreateMarketGEM(c *gin.Context) {
 	}
 
 	market, err := marketsvc.CreateGEM(c.Request.Context(), marketsvc.CreateGEMInput{
-		Title:           req.Title,
-		Description:     req.Description,
-		DataProvider:    req.DataProvider,
-		StartTimeUTC:    time.Unix(req.StartTimeUTC, 0).UTC(),
-		DurationSeconds: req.DurationSeconds,
+		Title:             req.Title,
+		Description:       req.Description,
+		DataProvider:      req.DataProvider,
+		StartTimeUTC:      time.Unix(req.StartTimeUTC, 0).UTC(),
+		DurationSeconds:   req.DurationSeconds,
+		MarketImageSmall:  req.MarketImageSmall,
+		MarketImageBanner: req.MarketImageBanner,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create GEM market: " + err.Error()})
@@ -217,6 +221,35 @@ func GetMarketsOnchain(c *gin.Context) {
 		"success": true,
 		"markets": markets,
 		"count":   len(markets),
+	})
+}
+
+func CreateMarketCAPPMAdmin(c *gin.Context) {
+	var req struct {
+		Asset           string `json:"asset" binding:"required"`
+		DurationSeconds uint64 `json:"duration_seconds" binding:"required"`
+		StartTimeUTC    int64  `json:"start_time_utc" binding:"required"`
+		AssetImage      string `json:"asset_image"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
+		return
+	}
+
+	market, err := marketsvc.CreateCAPPMFromAdmin(c.Request.Context(), marketsvc.CreateCAPPMFromAdminInput{
+		Asset:           req.Asset,
+		DurationSeconds: req.DurationSeconds,
+		StartTimeUTC:    time.Unix(req.StartTimeUTC, 0).UTC(),
+		AssetImage:      req.AssetImage,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create CAPPM: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"market":  market,
 	})
 }
 

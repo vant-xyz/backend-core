@@ -15,7 +15,8 @@ const marketColumns = `
 	data_provider, creator_address, market_pda, start_time_utc, end_time_utc,
 	duration_seconds, created_at, creation_tx_hash, asset, direction,
 	target_price, current_price, outcome, outcome_description,
-	end_price, settlement_tx_hash, resolved_at
+	end_price, settlement_tx_hash, resolved_at,
+	asset_image, market_image_small, market_image_banner
 `
 
 func SaveMarket(ctx context.Context, m *models.Market) error {
@@ -25,10 +26,11 @@ func SaveMarket(ctx context.Context, m *models.Market) error {
 			data_provider, creator_address, market_pda, start_time_utc, end_time_utc,
 			duration_seconds, created_at, creation_tx_hash, asset, direction,
 			target_price, current_price, outcome, outcome_description,
-			end_price, settlement_tx_hash, resolved_at
+			end_price, settlement_tx_hash, resolved_at,
+			asset_image, market_image_small, market_image_banner
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-			$17,$18,$19,$20,$21,$22,$23
+			$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
 		)
 	`,
 		m.ID, string(m.MarketType), string(m.Status), m.QuoteCurrency, m.Title,
@@ -37,6 +39,7 @@ func SaveMarket(ctx context.Context, m *models.Market) error {
 		m.CreationTxHash, m.Asset, string(m.Direction), m.TargetPrice,
 		m.CurrentPrice, string(m.Outcome), m.OutcomeDescription,
 		m.EndPrice, m.SettlementTxHash, m.ResolvedAt,
+		m.AssetImage, m.MarketImageSmall, m.MarketImageBanner,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save market %s: %w", m.ID, err)
@@ -188,6 +191,7 @@ func scanMarket(row marketScanner) (*models.Market, error) {
 		&m.CreationTxHash, &m.Asset, &direction, &m.TargetPrice,
 		&m.CurrentPrice, &outcome, &m.OutcomeDescription,
 		&m.EndPrice, &m.SettlementTxHash, &resolvedAt,
+		&m.AssetImage, &m.MarketImageSmall, &m.MarketImageBanner,
 	)
 	if err != nil {
 		return nil, err

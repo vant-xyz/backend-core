@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 	marketsvc "github.com/vant-xyz/backend-code/services/markets"
 )
@@ -270,6 +272,55 @@ func GetAllMarkets(c *gin.Context) {
 		"success": true,
 		"markets": markets,
 		"count":   len(markets),
+	})
+}
+
+func GetCAPPMStatus(c *gin.Context) {
+	enabled := os.Getenv("ENABLE_AUTO_CURATED_CAPPMS") == "true"
+	mode := "SETTLEMENT_ONLY"
+	if enabled {
+		mode = "AUTO_CREATION"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"enabled": enabled,
+		"mode":    mode,
+	})
+}
+
+func GetOverview(c *gin.Context) {
+	ctx := context.Background()
+
+	var (
+		userCount         int64
+		marketCount       int64
+		activeMarkets     int64
+		orderCount        int64
+		txCount           int64
+		tvlReal           float64
+		tvlDemo           float64
+		totalLocked       float64
+	)
+
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount)
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM markets`).Scan(&marketCount)
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM markets WHERE status = 'active'`).Scan(&activeMarkets)
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders`).Scan(&orderCount)
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM transactions`).Scan(&txCount)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(naira), 0) FROM balances`).Scan(&tvlReal)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDemo)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(locked_balance), 0) FROM balances`).Scan(&totalLocked)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"users":          userCount,
+		"markets":        marketCount,
+		"active_markets": activeMarkets,
+		"orders":         orderCount,
+		"transactions":   txCount,
+		"tvl_real":       tvlReal,
+		"tvl_demo":       tvlDemo,
+		"total_locked":   totalLocked,
 	})
 }
 

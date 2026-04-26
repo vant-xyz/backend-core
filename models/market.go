@@ -56,4 +56,8 @@ type Market struct {
 	EndPrice           uint64        `json:"end_price,omitempty" firestore:"end_price"`
 	SettlementTxHash   string        `json:"settlement_tx_hash,omitempty" firestore:"settlement_tx_hash"`
 	ResolvedAt         *time.Time    `json:"resolved_at,omitempty" firestore:"resolved_at"`
+
+	AssetImage         string `json:"asset_image,omitempty" firestore:"asset_image"`
+	MarketImageSmall   string `json:"market_image_small,omitempty" firestore:"market_image_small"`
+	MarketImageBanner  string `json:"market_image_banner,omitempty" firestore:"market_image_banner"`
 }

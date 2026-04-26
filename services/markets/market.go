@@ -23,14 +23,24 @@ type CreateCAPPMInput struct {
 	DataProvider    string
 	StartTimeUTC    time.Time
 	DurationSeconds uint64
+	AssetImage      string
 }
 
 type CreateGEMInput struct {
-	Title           string
-	Description     string
-	DataProvider    string
-	StartTimeUTC    time.Time
+	Title              string
+	Description        string
+	DataProvider       string
+	StartTimeUTC       time.Time
+	DurationSeconds    uint64
+	MarketImageSmall   string
+	MarketImageBanner  string
+}
+
+type CreateCAPPMFromAdminInput struct {
+	Asset           string
 	DurationSeconds uint64
+	StartTimeUTC    time.Time
+	AssetImage      string
 }
 
 type SettleGEMInput struct {
@@ -95,6 +105,7 @@ func CreateCAPPM(ctx context.Context, input CreateCAPPMInput) (*models.Market, e
 		Direction:       input.Direction,
 		TargetPrice:     input.TargetPrice,
 		CurrentPrice:    input.CurrentPrice,
+		AssetImage:      input.AssetImage,
 	}
 
 	if err := db.SaveMarket(ctx, market); err != nil {
@@ -136,20 +147,22 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 	endTime := input.StartTimeUTC.Add(time.Duration(input.DurationSeconds) * time.Second)
 
 	market := &models.Market{
-		ID:              marketID,
-		MarketType:      models.MarketTypeGEM,
-		Status:          models.MarketStatusActive,
-		QuoteCurrency:   defaultCurrency,
-		Title:           input.Title,
-		Description:     input.Description,
-		DataProvider:    input.DataProvider,
-		CreatorAddress:  settlerKey.PublicKey().String(),
-		MarketPDA:       marketPDA.String(),
-		StartTimeUTC:    input.StartTimeUTC,
-		EndTimeUTC:      endTime,
-		DurationSeconds: input.DurationSeconds,
-		CreatedAt:       now,
-		CreationTxHash:  txHash,
+		ID:                marketID,
+		MarketType:        models.MarketTypeGEM,
+		Status:            models.MarketStatusActive,
+		QuoteCurrency:     defaultCurrency,
+		Title:             input.Title,
+		Description:       input.Description,
+		DataProvider:      input.DataProvider,
+		CreatorAddress:    settlerKey.PublicKey().String(),
+		MarketPDA:         marketPDA.String(),
+		StartTimeUTC:      input.StartTimeUTC,
+		EndTimeUTC:        endTime,
+		DurationSeconds:   input.DurationSeconds,
+		CreatedAt:         now,
+		CreationTxHash:    txHash,
+		MarketImageSmall:  input.MarketImageSmall,
+		MarketImageBanner: input.MarketImageBanner,
 	}
 
 	if err := db.SaveMarket(ctx, market); err != nil {
@@ -158,6 +171,35 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 
 	log.Printf("[Markets] CreateGEM complete: id=%s pda=%s tx=%s", marketID, marketPDA, txHash)
 	return market, nil
+}
+
+func CreateCAPPMFromAdmin(ctx context.Context, input CreateCAPPMFromAdminInput) (*models.Market, error) {
+	currentCents, err := GetCurrentPrice(input.Asset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch current price for %s: %w", input.Asset, err)
+	}
+
+	momentumCents, err := GetMomentumPrice(input.Asset)
+	if err != nil {
+		momentumCents = currentCents
+	}
+
+	direction, targetPrice := calculateTarget(currentCents, momentumCents, 0.01)
+	title := buildMarketTitle(input.Asset, direction, targetPrice, fmt.Sprintf("%ds", input.DurationSeconds))
+	description := buildMarketDescription(input.Asset, direction, targetPrice, fmt.Sprintf("%ds", input.DurationSeconds))
+
+	return CreateCAPPM(ctx, CreateCAPPMInput{
+		Title:           title,
+		Description:     description,
+		Asset:           input.Asset,
+		Direction:       direction,
+		TargetPrice:     targetPrice,
+		CurrentPrice:    currentCents,
+		DataProvider:    "coinbase",
+		StartTimeUTC:    input.StartTimeUTC,
+		DurationSeconds: input.DurationSeconds,
+		AssetImage:      input.AssetImage,
+	})
 }
 
 func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) error {
