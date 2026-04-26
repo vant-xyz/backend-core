@@ -106,6 +106,28 @@ func GetOpenOrdersForMarket(ctx context.Context, marketID string) ([]models.Orde
 	return scanOrders(rows)
 }
 
+func GetMarketFilledOrders(ctx context.Context, marketID string) ([]models.Order, error) {
+	rows, err := Pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE market_id = $1 AND status IN ('FILLED', 'PARTIALLY_FILLED') ORDER BY updated_at ASC`,
+		marketID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanOrders(rows)
+}
+
+func GetMarketTrades(ctx context.Context, marketID string, limit int) ([]models.Order, error) {
+	rows, err := Pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE market_id = $1 AND status = 'FILLED' ORDER BY updated_at DESC LIMIT $2`,
+		marketID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanOrders(rows)
+}
+
 type orderScanner interface {
 	Scan(dest ...any) error
 }

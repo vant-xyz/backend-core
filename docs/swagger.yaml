@@ -24,6 +24,13 @@ info:
     - **GEM** — General Event Markets. Any binary event. Created and settled manually via admin.
     - Winning shares pay $1.00 USD each. Prices between $0.01–$0.99 per share.
 
+    ## Order Placement Flow
+    `quantity` in `POST /orders` is always **shares**, not dollars. To convert a dollar stake
+    to shares before placing an order:
+    1. Call `GET /markets/{id}/quote?side=YES&stake=<amount>` to get `estimated_shares` and `avg_price`.
+    2. For a **market order**: use `estimated_shares` as `quantity`.
+    3. For a **limit order**: choose your trigger price `P`, then `quantity = stake / P`.
+
     ## WebSockets
     - `GET /ws` — Authenticated. Pushes live BTC/ETH/SOL prices every 5s and
       `BALANCE_UPDATE` events when user balance changes.
@@ -426,6 +433,96 @@ components:
           description: Difference between best YES ask and best YES bid
           example: 0.02
         fetched_at:
+          type: string
+          format: date-time
+
+    CandlePoint:
+      type: object
+      properties:
+        time:
+          type: integer
+          description: Candle open time as Unix timestamp
+          example: 1714123200
+        open:
+          type: number
+          example: 90100.00
+        high:
+          type: number
+          example: 90450.00
+        low:
+          type: number
+          example: 89900.00
+        close:
+          type: number
+          example: 90320.00
+        volume:
+          type: number
+          example: 134.52
+
+    TrendPoint:
+      type: object
+      properties:
+        time:
+          type: integer
+          description: Bucket start time as Unix timestamp
+          example: 1714123200
+        yes_volume:
+          type: number
+          description: Total YES shares filled in this time bucket
+          example: 320.5
+        no_volume:
+          type: number
+          description: Total NO shares filled in this time bucket
+          example: 180.0
+
+    FillPreview:
+      type: object
+      properties:
+        side:
+          type: string
+          enum: [YES, NO]
+          example: "YES"
+        stake:
+          type: number
+          description: Dollar amount the user wants to spend
+          example: 10.00
+        avg_price:
+          type: number
+          description: Weighted average fill price per share in USD
+          example: 0.63
+        estimated_shares:
+          type: number
+          description: How many shares the stake would buy at current book depth
+          example: 15.87
+        fills_completely:
+          type: boolean
+          description: Whether the full stake can be filled from the current orderbook
+          example: true
+        total_cost:
+          type: number
+          description: Total cost consumed from the orderbook (may be less than stake if partial fill)
+          example: 10.00
+
+    TradeEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Order ID of the fill
+          example: "ORD_7X2K9P"
+        side:
+          type: string
+          enum: [YES, NO]
+          example: "YES"
+        price:
+          type: number
+          description: Price per share the order was placed at, in USD
+          example: 0.62
+        quantity:
+          type: number
+          description: Number of shares filled
+          example: 50
+        filled_at:
           type: string
           format: date-time
 
@@ -1303,6 +1400,186 @@ paths:
                     type: number
                     example: 0.61
 
+  /markets/{id}/candles:
+    get:
+      tags: [Markets]
+      summary: Get OHLCV candle data for a market's underlying asset
+      description: |
+        Returns candlestick data sourced from Coinbase for the asset tied to this market.
+        The candle interval adapts to market duration:
+        - Market ≤ 5 min → 1-minute candles
+        - Market ≤ 15 min → 5-minute candles
+        - Market > 15 min → 15-minute candles
+
+        Up to 200 candles are returned, covering recent price history.
+        `interval_seconds` in the response tells the frontend the width of each candle.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Candle array
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market_id:
+                    type: string
+                  interval_seconds:
+                    type: integer
+                    description: Duration of each candle in seconds (60, 300, or 900)
+                    example: 60
+                  candles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CandlePoint'
+                  count:
+                    type: integer
+        '500':
+          description: Failed to fetch from Coinbase
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /markets/{id}/opinion-trend:
+    get:
+      tags: [Markets]
+      summary: Get YES/NO opinion trend over the market's lifetime
+      description: |
+        Returns a time-series of YES and NO share volume bucketed into intervals.
+        The bucket size adapts to market duration:
+        - Market ≤ 5 min → 30-second buckets
+        - Market ≤ 15 min → 60-second buckets
+        - Market ≤ 1 hr → 5-minute buckets
+        - Market > 1 hr → 15-minute buckets
+
+        Use this to render the opinion trend line chart showing how trader sentiment
+        has shifted over time.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Trend time-series
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market_id:
+                    type: string
+                  trend:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TrendPoint'
+                  count:
+                    type: integer
+
+  /markets/{id}/quote:
+    get:
+      tags: [Markets]
+      summary: Get a fill preview for a given stake amount
+      description: |
+        Reads the live in-memory orderbook and calculates what you would get if you
+        placed an order right now. No order is created. Use this before `POST /orders`
+        to show the user their estimated fill.
+
+        **Quantity note:** `POST /orders` takes `quantity` in **shares**, not dollars.
+        Use `estimated_shares` from this response as `quantity` for a market order.
+        For a limit order at price `P`: `quantity = stake / P`.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: side
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [YES, NO]
+        - name: stake
+          in: query
+          required: true
+          schema:
+            type: number
+          description: Dollar amount the user wants to spend
+          example: 10.00
+      responses:
+        '200':
+          description: Fill preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  preview:
+                    $ref: '#/components/schemas/FillPreview'
+        '400':
+          description: Invalid side or stake
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /markets/{id}/trades:
+    get:
+      tags: [Markets]
+      summary: Get recent trades for a market
+      description: |
+        Returns the most recent filled orders for this market, sorted newest first.
+        User emails are not exposed. Use this to render the public trade history table
+        alongside the orderbook.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Recent trades
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market_id:
+                    type: string
+                  trades:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TradeEntry'
+                  count:
+                    type: integer
+
   /markets/{id}/onchain:
     get:
       tags: [OVM]
@@ -1398,6 +1675,10 @@ paths:
 
         Both sides are always available: YES (betting the outcome is YES) and
         NO (betting the outcome is NO). YES + NO fills in any market always total $1.00.
+
+        **`quantity` is always shares, not dollars.** To convert a dollar stake to shares,
+        call `GET /markets/{id}/quote?side=YES&stake=<amount>` first and use
+        `estimated_shares` as `quantity`. For limit orders: `quantity = stake / price`.
       requestBody:
         required: true
         content:
