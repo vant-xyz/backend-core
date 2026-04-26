@@ -167,3 +167,36 @@ func scanPositions(rows pgx.Rows) ([]models.Position, error) {
 	}
 	return positions, rows.Err()
 }
+
+type SettledPositionWithUser struct {
+	UserEmail string           `json:"user_email"`
+	Username  string           `json:"username"`
+	Side      models.OrderSide `json:"side"`
+	Shares    float64          `json:"shares"`
+	Payout    float64          `json:"payout"`
+}
+
+func GetSettledPositionsWithUsers(ctx context.Context, marketID string) ([]SettledPositionWithUser, error) {
+	rows, err := Pool.Query(ctx, `
+		SELECT p.user_email, COALESCE(u.username, p.user_email), p.side, p.shares, p.payout_amount
+		FROM positions p
+		LEFT JOIN users u ON u.email = p.user_email
+		WHERE p.market_id = $1 AND p.status = 'SETTLED'
+		ORDER BY p.payout_amount DESC
+	`, marketID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []SettledPositionWithUser
+	for rows.Next() {
+		var sp SettledPositionWithUser
+		var side string
+		if err := rows.Scan(&sp.UserEmail, &sp.Username, &side, &sp.Shares, &sp.Payout); err != nil {
+			continue
+		}
+		sp.Side = models.OrderSide(side)
+		result = append(result, sp)
+	}
+	return result, rows.Err()
+}

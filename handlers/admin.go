@@ -148,7 +148,7 @@ func GetMarketStats(c *gin.Context) {
 		impliedYesPct = lastPrice
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"success": true,
 		"market":  market,
 		"stats": gin.H{
@@ -164,7 +164,29 @@ func GetMarketStats(c *gin.Context) {
 			"implied_yes_pct":   impliedYesPct,
 			"quote_currency":    market.QuoteCurrency,
 		},
-	})
+	}
+
+	if market.Status == models.MarketStatusResolved {
+		settled, err := db.GetSettledPositionsWithUsers(c.Request.Context(), marketID)
+		if err == nil {
+			winners := []gin.H{}
+			losers := []gin.H{}
+			for _, sp := range settled {
+				isWinner := (market.Outcome == models.OutcomeYes && sp.Side == models.OrderSideYes) ||
+					(market.Outcome == models.OutcomeNo && sp.Side == models.OrderSideNo)
+				entry := gin.H{"username": sp.Username, "side": string(sp.Side), "shares": sp.Shares, "payout": sp.Payout}
+				if isWinner {
+					winners = append(winners, entry)
+				} else {
+					losers = append(losers, entry)
+				}
+			}
+			resp["winners"] = winners
+			resp["losers"] = losers
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 func GetUserExposure(c *gin.Context) {
