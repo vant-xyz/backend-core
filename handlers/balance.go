@@ -332,8 +332,8 @@ func FundDemoAccount(c *gin.Context) {
 		return
 	}
 
-	if err = db.UpdateBalance(c.Request.Context(), email, "demo_sol", amountSol); err != nil {
-		log.Printf("[Faucet] Failed to update balance after faucet for %s: %v", email, err)
+	if err = db.UpdateBalance(c.Request.Context(), email, "demo_naira", req.AmountNaira); err != nil {
+		log.Printf("[Faucet] Failed to update demo balance after faucet for %s: %v", email, err)
 	}
 
 	transaction := models.Transaction{
