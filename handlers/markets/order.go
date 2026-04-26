@@ -20,6 +20,7 @@ func PlaceOrder(c *gin.Context) {
 		Type      string  `json:"type" binding:"required"`
 		Price     float64 `json:"price"`
 		Quantity  float64 `json:"quantity" binding:"required"`
+		IsDemo    bool    `json:"is_demo"`
 		ExpiresAt *int64  `json:"expires_at"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -62,6 +63,7 @@ func PlaceOrder(c *gin.Context) {
 		Type:      orderType,
 		Price:     req.Price,
 		Quantity:  req.Quantity,
+		IsDemo:    req.IsDemo,
 		ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -152,12 +154,12 @@ func GetOrderbookDepth(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":          true,
-		"market_id":        marketID,
-		"side":             side,
-		"bids":             bids,
-		"asks":             asks,
-		"spread":           spread,
+		"success":           true,
+		"market_id":         marketID,
+		"side":              side,
+		"bids":              bids,
+		"asks":              asks,
+		"spread":            spread,
 		"last_traded_price": engine.GetLastTradedPrice(marketID),
 	})
 }

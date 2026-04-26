@@ -19,6 +19,7 @@ type PlaceOrderInput struct {
 	Type      models.OrderType
 	Price     float64
 	Quantity  float64
+	IsDemo    bool
 	ExpiresAt *time.Time
 }
 
@@ -57,6 +58,8 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 		return nil, fmt.Errorf("limit order price must be less than 100 %s per share", market.QuoteCurrency)
 	}
 
+	currency := orderBalanceCurrency(input.IsDemo)
+
 	var lockedAmount float64
 	if input.Type == models.OrderTypeLimit {
 		lockedAmount = input.Price * input.Quantity
@@ -68,7 +71,7 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 		lockedAmount = bestAsk * input.Quantity
 	}
 
-	if err := services.LockBalance(ctx, input.UserEmail, lockedAmount, market.QuoteCurrency); err != nil {
+	if err := services.LockBalance(ctx, input.UserEmail, lockedAmount, currency); err != nil {
 		return nil, fmt.Errorf("insufficient balance: %w", err)
 	}
 
@@ -85,13 +88,14 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 		RemainingQty:  input.Quantity,
 		Status:        models.OrderStatusOpen,
 		QuoteCurrency: market.QuoteCurrency,
+		IsDemo:        input.IsDemo,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		ExpiresAt:     input.ExpiresAt,
 	}
 
 	if err := db.RedisStoreOrder(ctx, order); err != nil {
-		if unlockErr := services.UnlockBalance(ctx, input.UserEmail, lockedAmount, market.QuoteCurrency); unlockErr != nil {
+		if unlockErr := services.UnlockBalance(ctx, input.UserEmail, lockedAmount, currency); unlockErr != nil {
 			log.Printf("[Orders] CRITICAL: failed to unlock balance after order save failure for %s: %v",
 				input.UserEmail, unlockErr)
 		}
@@ -123,11 +127,6 @@ func CancelOrder(ctx context.Context, orderID, userEmail string) error {
 		return fmt.Errorf("order %s cannot be cancelled (status: %s)", orderID, order.Status)
 	}
 
-	market, err := GetMarketByID(ctx, order.MarketID)
-	if err != nil {
-		return fmt.Errorf("market not found for order %s: %w", orderID, err)
-	}
-
 	if err := db.UpdateOrderStatus(ctx, orderID, models.OrderStatusCancelled); err != nil {
 		return fmt.Errorf("failed to update order status: %w", err)
 	}
@@ -136,12 +135,20 @@ func CancelOrder(ctx context.Context, orderID, userEmail string) error {
 
 	refundAmount := order.Price * order.RemainingQty
 	if refundAmount > 0 {
-		if err := services.UnlockBalance(ctx, userEmail, refundAmount, market.QuoteCurrency); err != nil {
+		currency := orderBalanceCurrency(order.IsDemo)
+		if err := services.UnlockBalance(ctx, userEmail, refundAmount, currency); err != nil {
 			log.Printf("[Orders] CRITICAL: failed to unlock balance on cancel for order %s user %s: %v",
 				orderID, userEmail, err)
 		}
 	}
 	return nil
+}
+
+func orderBalanceCurrency(isDemo bool) string {
+	if isDemo {
+		return "USD_DEMO"
+	}
+	return "USD"
 }
 
 func GetOrderByID(ctx context.Context, orderID string) (*models.Order, error) {

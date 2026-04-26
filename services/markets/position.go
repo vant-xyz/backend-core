@@ -21,10 +21,11 @@ type UpsertPositionInput struct {
 	Shares        float64
 	FillPrice     float64
 	QuoteCurrency string
+	IsDemo        bool
 }
 
 func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Position, error) {
-	existing, err := db.GetUserPositionForMarketSide(ctx, input.UserEmail, input.MarketID, input.Side)
+	existing, err := db.GetUserPositionForMarketSide(ctx, input.UserEmail, input.MarketID, input.Side, input.IsDemo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query existing position: %w", err)
 	}
@@ -46,6 +47,7 @@ func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Pos
 		PayoutAmount:  0,
 		Status:        models.PositionStatusActive,
 		QuoteCurrency: input.QuoteCurrency,
+		IsDemo:        input.IsDemo,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -53,7 +55,7 @@ func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Pos
 	if err := db.SavePosition(ctx, position); err != nil {
 		if db.IsDuplicateKeyError(err) {
 			// Concurrent fill beat us to the insert — re-fetch and update.
-			existing, err = db.GetUserPositionForMarketSide(ctx, input.UserEmail, input.MarketID, input.Side)
+			existing, err = db.GetUserPositionForMarketSide(ctx, input.UserEmail, input.MarketID, input.Side, input.IsDemo)
 			if err != nil || existing == nil {
 				return nil, fmt.Errorf("failed to recover from concurrent position insert: %w", err)
 			}
@@ -93,7 +95,8 @@ func SettlePosition(ctx context.Context, positionID string, outcome models.Marke
 	if positionWon {
 		payout = position.Shares * payoutPerWinningShare
 		realizedPnL = payout - (position.Shares * position.AvgEntryPrice)
-		if err := services.CreditBalance(ctx, position.UserEmail, payout, position.QuoteCurrency); err != nil {
+		currency := orderBalanceCurrency(position.IsDemo)
+		if err := services.CreditBalance(ctx, position.UserEmail, payout, currency); err != nil {
 			return fmt.Errorf("failed to credit payout for position %s user %s: %w",
 				positionID, position.UserEmail, err)
 		}

@@ -27,7 +27,7 @@ func IsDuplicateKeyError(err error) bool {
 
 const positionColumns = `
 	id, user_email, market_id, side, shares, avg_entry_price,
-	realized_pnl, payout_amount, status, quote_currency,
+	realized_pnl, payout_amount, status, quote_currency, is_demo,
 	created_at, updated_at, settled_at
 `
 
@@ -35,13 +35,13 @@ func SavePosition(ctx context.Context, p *models.Position) error {
 	_, err := Pool.Exec(ctx, `
 		INSERT INTO positions (
 			id, user_email, market_id, side, shares, avg_entry_price,
-			realized_pnl, payout_amount, status, quote_currency,
+			realized_pnl, payout_amount, status, quote_currency, is_demo,
 			created_at, updated_at, settled_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	`,
 		p.ID, p.UserEmail, p.MarketID, string(p.Side), p.Shares,
 		p.AvgEntryPrice, p.RealizedPnL, p.PayoutAmount, string(p.Status),
-		p.QuoteCurrency, p.CreatedAt, p.UpdatedAt, p.SettledAt,
+		p.QuoteCurrency, p.IsDemo, p.CreatedAt, p.UpdatedAt, p.SettledAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save position %s: %w", p.ID, err)
@@ -63,13 +63,13 @@ func GetPositionByID(ctx context.Context, positionID string) (*models.Position, 
 	return p, nil
 }
 
-func GetUserPositionForMarketSide(ctx context.Context, userEmail, marketID string, side models.OrderSide) (*models.Position, error) {
+func GetUserPositionForMarketSide(ctx context.Context, userEmail, marketID string, side models.OrderSide, isDemo bool) (*models.Position, error) {
 	row := Pool.QueryRow(ctx, `
 		SELECT `+positionColumns+`
 		FROM positions
-		WHERE user_email = $1 AND market_id = $2 AND side = $3 AND status = 'ACTIVE'
+		WHERE user_email = $1 AND market_id = $2 AND side = $3 AND is_demo = $4 AND status = 'ACTIVE'
 		LIMIT 1
-	`, userEmail, marketID, string(side))
+	`, userEmail, marketID, string(side), isDemo)
 
 	p, err := scanPosition(row)
 	if err != nil {
@@ -142,7 +142,7 @@ func scanPosition(row positionScanner) (*models.Position, error) {
 	err := row.Scan(
 		&p.ID, &p.UserEmail, &p.MarketID, &side, &p.Shares,
 		&p.AvgEntryPrice, &p.RealizedPnL, &p.PayoutAmount, &status,
-		&p.QuoteCurrency, &p.CreatedAt, &p.UpdatedAt, &p.SettledAt,
+		&p.QuoteCurrency, &p.IsDemo, &p.CreatedAt, &p.UpdatedAt, &p.SettledAt,
 	)
 	if err != nil {
 		return nil, err

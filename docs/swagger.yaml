@@ -338,6 +338,10 @@ components:
         quote_currency:
           type: string
           example: "USD"
+        is_demo:
+          type: boolean
+          description: True if this order was placed using demo balance
+          example: false
         created_at:
           type: string
           format: date-time
@@ -386,6 +390,10 @@ components:
         quote_currency:
           type: string
           example: "USD"
+        is_demo:
+          type: boolean
+          description: True if this position was opened with demo balance
+          example: false
         created_at:
           type: string
           format: date-time
@@ -1715,6 +1723,13 @@ paths:
                   type: number
                   description: Number of shares
                   example: 100
+                is_demo:
+                  type: boolean
+                  description: |
+                    Set to `true` to place the order using demo balance (`demo_naira`).
+                    Omit or set `false` for real balance. Demo and real orders share the
+                    same orderbook — they can match against each other.
+                  example: false
                 expires_at:
                   type: integer
                   description: Optional Unix timestamp for order expiry (limit orders only)

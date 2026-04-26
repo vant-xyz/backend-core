@@ -76,10 +76,17 @@ func SettleMarketGEM(c *gin.Context) {
 		return
 	}
 
+	result, err := marketsvc.ProcessMarketSettlement(c.Request.Context(), marketID, outcome)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Settlement processing failed: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success":   true,
 		"market_id": marketID,
 		"outcome":   req.Outcome,
+		"result":    result,
 	})
 }
 

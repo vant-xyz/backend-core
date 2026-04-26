@@ -11,7 +11,7 @@ import (
 
 const orderColumns = `
 	id, user_email, market_id, side, type, price, quantity,
-	filled_qty, remaining_qty, status, quote_currency,
+	filled_qty, remaining_qty, status, quote_currency, is_demo,
 	created_at, updated_at, expires_at
 `
 
@@ -19,13 +19,13 @@ func SaveOrder(ctx context.Context, o *models.Order) error {
 	_, err := Pool.Exec(ctx, `
 		INSERT INTO orders (
 			id, user_email, market_id, side, type, price, quantity,
-			filled_qty, remaining_qty, status, quote_currency,
+			filled_qty, remaining_qty, status, quote_currency, is_demo,
 			created_at, updated_at, expires_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 	`,
 		o.ID, o.UserEmail, o.MarketID, string(o.Side), string(o.Type),
 		o.Price, o.Quantity, o.FilledQty, o.RemainingQty, string(o.Status),
-		o.QuoteCurrency, o.CreatedAt, o.UpdatedAt, o.ExpiresAt,
+		o.QuoteCurrency, o.IsDemo, o.CreatedAt, o.UpdatedAt, o.ExpiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save order %s: %w", o.ID, err)
@@ -139,7 +139,7 @@ func scanOrder(row orderScanner) (*models.Order, error) {
 	err := row.Scan(
 		&o.ID, &o.UserEmail, &o.MarketID, &side, &orderType,
 		&o.Price, &o.Quantity, &o.FilledQty, &o.RemainingQty, &status,
-		&o.QuoteCurrency, &o.CreatedAt, &o.UpdatedAt, &o.ExpiresAt,
+		&o.QuoteCurrency, &o.IsDemo, &o.CreatedAt, &o.UpdatedAt, &o.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err

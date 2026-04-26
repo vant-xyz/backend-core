@@ -37,6 +37,7 @@ type Order struct {
 	RemainingQty  float64     `json:"remaining_qty" firestore:"remaining_qty"`
 	Status        OrderStatus `json:"status" firestore:"status"`
 	QuoteCurrency string      `json:"quote_currency" firestore:"quote_currency"`
+	IsDemo        bool        `json:"is_demo" firestore:"is_demo" db:"is_demo"`
 	CreatedAt     time.Time   `json:"created_at" firestore:"created_at"`
 	UpdatedAt     time.Time   `json:"updated_at" firestore:"updated_at"`
 	ExpiresAt     *time.Time  `json:"expires_at,omitempty" firestore:"expires_at"`

@@ -418,6 +418,7 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 		Shares:        qty,
 		FillPrice:     price,
 		QuoteCurrency: market.QuoteCurrency,
+		IsDemo:        taker.IsDemo,
 	}); err != nil {
 		log.Printf("[Engine] Failed to upsert taker position for %s: %v", taker.UserEmail, err)
 	}
@@ -429,6 +430,7 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 		Shares:        qty,
 		FillPrice:     price,
 		QuoteCurrency: market.QuoteCurrency,
+		IsDemo:        maker.IsDemo,
 	}); err != nil {
 		log.Printf("[Engine] Failed to upsert maker position for %s: %v", maker.UserEmail, err)
 	}
@@ -493,6 +495,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		Shares:        qty,
 		FillPrice:     taker.Price,
 		QuoteCurrency: market.QuoteCurrency,
+		IsDemo:        taker.IsDemo,
 	}); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to upsert taker position for %s: %v", fillID, taker.UserEmail, err)
 	}
@@ -504,6 +507,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		Shares:        qty,
 		FillPrice:     maker.Price,
 		QuoteCurrency: market.QuoteCurrency,
+		IsDemo:        maker.IsDemo,
 	}); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to upsert maker position for %s: %v", fillID, maker.UserEmail, err)
 	}
