@@ -159,6 +159,7 @@ func main() {
 	admin := r.Group("/admin")
 	admin.Use(handlers.AdminAuthMiddleware())
 	{
+		admin.POST("/upload", handlers.AdminUploadImage)
 		admin.POST("/markets/gem", handlersmarkets.CreateMarketGEM)
 		admin.POST("/markets/cappm", handlersmarkets.CreateMarketCAPPMAdmin)
 		admin.POST("/markets/:id/settle", handlersmarkets.SettleMarketGEM)

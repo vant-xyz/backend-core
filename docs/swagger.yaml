@@ -286,6 +286,18 @@ components:
         resolved_at:
           type: string
           format: date-time
+        asset_image:
+          type: string
+          description: CAPPM only — Cloudinary URL for the asset icon
+          example: "https://res.cloudinary.com/vantic/image/upload/v1/assets/btc.png"
+        market_image_small:
+          type: string
+          description: GEM only — Cloudinary URL for small market thumbnail
+          example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-small.png"
+        market_image_banner:
+          type: string
+          description: GEM only — Cloudinary URL for market banner image
+          example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-banner.png"
 
     Order:
       type: object
@@ -1841,6 +1853,14 @@ paths:
                   type: integer
                   description: Market duration from start_time_utc
                   example: 7200
+                market_image_small:
+                  type: string
+                  description: Cloudinary URL for small market thumbnail
+                  example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-small.png"
+                market_image_banner:
+                  type: string
+                  description: Cloudinary URL for market banner image
+                  example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-banner.png"
       responses:
         '200':
           description: GEM created
@@ -2150,3 +2170,201 @@ paths:
                           type: number
                         quote_currency:
                           type: string
+
+  /admin/upload:
+    post:
+      tags: [Admin]
+      summary: Upload an image to Cloudinary
+      description: Accepts a multipart image file and uploads it to Cloudinary. Returns the secure URL to store on a market.
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: Image file to upload
+                folder:
+                  type: string
+                  description: Cloudinary folder. Defaults to vant_markets.
+                  example: "vant_markets"
+      responses:
+        '200':
+          description: Upload successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  url:
+                    type: string
+                    description: Secure Cloudinary URL of the uploaded image
+                    example: "https://res.cloudinary.com/vantic/image/upload/v1/vant_markets/1714123200000.png"
+        '400':
+          description: No image provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized — invalid admin key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/markets/cappm:
+    post:
+      tags: [Admin]
+      summary: Create a CAPPM market manually
+      description: |
+        Creates a Crypto Asset Price Prediction Market. The backend automatically fetches the
+        current price, calculates a target using momentum, and generates the market title/description.
+        Only `asset`, `duration_seconds`, `start_time_utc`, and `asset_image` are required.
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset, duration_seconds]
+              properties:
+                asset:
+                  type: string
+                  enum: [BTC, ETH, SOL]
+                  example: "BTC"
+                duration_seconds:
+                  type: integer
+                  description: Market duration from start_time_utc
+                  example: 300
+                start_time_utc:
+                  type: integer
+                  description: Unix timestamp. Defaults to now if omitted.
+                  example: 1714123200
+                asset_image:
+                  type: string
+                  description: Cloudinary URL for the asset icon
+                  example: "https://res.cloudinary.com/vantic/image/upload/v1/assets/btc.png"
+      responses:
+        '200':
+          description: CAPPM created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  market:
+                    $ref: '#/components/schemas/Market'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized — invalid admin key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/cappm/status:
+    get:
+      tags: [Admin]
+      summary: Get CAPPM auto-curation status
+      description: Returns whether the backend is auto-creating CAPPM markets on a schedule.
+      security:
+        - adminKey: []
+      responses:
+        '200':
+          description: Auto-curation status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  enabled:
+                    type: boolean
+                    description: True when ENABLE_AUTO_CURATED_CAPPMS=true in server env
+                    example: false
+                  mode:
+                    type: string
+                    enum: [AUTO_CREATION, SETTLEMENT_ONLY]
+                    description: AUTO_CREATION when enabled; SETTLEMENT_ONLY when disabled
+                    example: "SETTLEMENT_ONLY"
+        '401':
+          description: Unauthorized — invalid admin key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/overview:
+    get:
+      tags: [Admin]
+      summary: Platform overview metrics
+      description: Returns aggregate counts and TVL figures for the whole platform.
+      security:
+        - adminKey: []
+      responses:
+        '200':
+          description: Platform metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  users:
+                    type: integer
+                    description: Total registered users
+                    example: 1240
+                  markets:
+                    type: integer
+                    description: All-time total markets
+                    example: 87
+                  active_markets:
+                    type: integer
+                    description: Currently active (unresolved) markets
+                    example: 12
+                  orders:
+                    type: integer
+                    description: All-time total orders placed
+                    example: 34500
+                  transactions:
+                    type: integer
+                    description: All-time total transactions
+                    example: 9800
+                  tvl_real:
+                    type: number
+                    description: Total real USD held in user balances
+                    example: 52000.00
+                  tvl_demo:
+                    type: number
+                    description: Total demo USD held in user balances
+                    example: 180000.00
+                  total_locked:
+                    type: number
+                    description: Total USD locked in open limit orders across all users
+                    example: 7400.00
+        '401':
+          description: Unauthorized — invalid admin key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

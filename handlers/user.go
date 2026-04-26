@@ -86,7 +86,7 @@ func UploadProfileImage(c *gin.Context) {
 	defer openedFile.Close()
 
 	publicID := "profile_" + email.(string)
-	url, err := services.UploadImage(c.Request.Context(), openedFile, publicID)
+	url, err := services.UploadImage(c.Request.Context(), openedFile, "vant_profiles", publicID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Upload failed: " + err.Error()})
 		return
