@@ -25,6 +25,8 @@ type UserAdminStats struct {
 	OpenPositions   int64      `json:"open_positions"`
 	RealizedPnL     float64    `json:"realized_pnl"`
 	LastTraded      *time.Time `json:"last_traded"`
+	SolPublicKey    string     `json:"sol_public_key,omitempty"`
+	BasePublicKey   string     `json:"base_public_key,omitempty"`
 }
 
 const userStatsJoin = `
@@ -125,7 +127,9 @@ func GetAdminUsers(ctx context.Context, search, sortBy string, limit, offset int
 }
 
 func GetAdminUserByEmail(ctx context.Context, email string) (*UserAdminStats, error) {
-	q := userStatsSelect + userStatsJoin + " WHERE u.email = $1"
+	q := userStatsSelect + `, COALESCE(w.sol_public_key, ''), COALESCE(w.base_public_key, '')` +
+		userStatsJoin +
+		` LEFT JOIN wallets w ON w.email = u.email WHERE u.email = $1`
 	rows, err := Pool.Query(ctx, q, email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user %s: %w", email, err)
@@ -134,11 +138,19 @@ func GetAdminUserByEmail(ctx context.Context, email string) (*UserAdminStats, er
 	if !rows.Next() {
 		return nil, fmt.Errorf("user not found: %s", email)
 	}
-	u, err := scanUserStats(rows)
-	if err != nil {
+	var u UserAdminStats
+	if err := rows.Scan(
+		&u.Email, &u.Username, &u.VantID, &u.ProfileImageURL, &u.CreatedAt,
+		&u.Balance, &u.DemoBalance,
+		&u.TotalOrders, &u.FilledOrders,
+		&u.WinCount, &u.LossCount,
+		&u.OpenPositions, &u.RealizedPnL,
+		&u.LastTraded,
+		&u.SolPublicKey, &u.BasePublicKey,
+	); err != nil {
 		return nil, fmt.Errorf("failed to scan user %s: %w", email, err)
 	}
-	return u, nil
+	return &u, nil
 }
 
 func GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
