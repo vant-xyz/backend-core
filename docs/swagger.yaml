@@ -95,6 +95,8 @@ components:
         open_positions: { type: integer }
         realized_pnl: { type: number }
         last_traded: { type: string, format: date-time, nullable: true }
+        sol_public_key: { type: string, description: Solana custodial wallet address. Only present on single-user detail endpoint. }
+        base_public_key: { type: string, description: Base custodial wallet address. Only present on single-user detail endpoint. }
 
     SuccessMessage:
       type: object
