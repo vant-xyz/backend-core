@@ -147,7 +147,7 @@ func GetHistoricalPrice(asset string, at time.Time) (uint64, error) {
 	}
 	historicalCacheMu.RUnlock()
 
-	cents, err := fetchSpotPriceCents(asset, at)
+	cents, err := fetchMinutePriceCents(asset, at)
 	if err != nil {
 		return 0, err
 	}
@@ -157,6 +157,62 @@ func GetHistoricalPrice(asset string, at time.Time) (uint64, error) {
 	historicalCacheMu.Unlock()
 
 	return cents, nil
+}
+
+func fetchMinutePriceCents(asset string, at time.Time) (uint64, error) {
+	start := at.Add(-3 * time.Minute)
+	end := at.Add(3 * time.Minute)
+
+	pathWithQuery := fmt.Sprintf(
+		"/api/v3/brokerage/products/%s-USD/candles?start=%d&end=%d&granularity=ONE_MINUTE",
+		asset, start.Unix(), end.Unix(),
+	)
+	fullURL := "https://" + coinbaseAdvancedHost + pathWithQuery
+
+	var result struct {
+		Candles []struct {
+			Start string `json:"start"`
+			Close string `json:"close"`
+		} `json:"candles"`
+	}
+
+	if err := doRequest("GET", fullURL, pathWithQuery, true, &result); err != nil {
+		return 0, fmt.Errorf("historical candle fetch failed for %s at %s: %w", asset, at.Format(time.RFC3339), err)
+	}
+
+	if len(result.Candles) == 0 {
+		return 0, fmt.Errorf("no candle data for %s at %s", asset, at.Format(time.RFC3339))
+	}
+
+	targetUnix := at.Unix()
+	bestClose := ""
+	var bestDiff int64 = math.MaxInt64
+
+	for _, c := range result.Candles {
+		ts, _ := strconv.ParseInt(c.Start, 10, 64)
+		if targetUnix >= ts && targetUnix < ts+60 {
+			bestClose = c.Close
+			break
+		}
+		diff := targetUnix - ts
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			bestDiff = diff
+			bestClose = c.Close
+		}
+	}
+
+	if bestClose == "" {
+		return 0, fmt.Errorf("could not find candle close for %s at %s", asset, at.Format(time.RFC3339))
+	}
+
+	dollars, err := strconv.ParseFloat(bestClose, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse candle close %q: %w", bestClose, err)
+	}
+	return uint64(math.Round(dollars * 100)), nil
 }
 
 func GetMomentumPrice(asset string) (uint64, error) {
