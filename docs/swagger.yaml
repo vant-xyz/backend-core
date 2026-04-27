@@ -78,6 +78,24 @@ components:
           type: string
           example: "Invalid request"
 
+    UserAdminStats:
+      type: object
+      properties:
+        email: { type: string }
+        username: { type: string }
+        vant_id: { type: string }
+        profile_image_url: { type: string }
+        created_at: { type: string, format: date-time }
+        balance: { type: number, description: Real USD balance }
+        demo_balance: { type: number }
+        total_orders: { type: integer }
+        filled_orders: { type: integer }
+        win_count: { type: integer }
+        loss_count: { type: integer }
+        open_positions: { type: integer }
+        realized_pnl: { type: number }
+        last_traded: { type: string, format: date-time, nullable: true }
+
     SuccessMessage:
       type: object
       properties:
@@ -2383,3 +2401,167 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: List all users with trading stats
+      security:
+        - adminKey: []
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+          description: Search by email, username, or Vant ID (ILIKE)
+        - in: query
+          name: sort
+          schema: { type: string, enum: [balance, win_rate, last_traded] }
+          description: Sort field. Omit for newest-first.
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+      responses:
+        '200':
+          description: Paginated user list with stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  users: { type: array, items: { $ref: '#/components/schemas/UserAdminStats' } }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pages: { type: integer }
+        '401':
+          description: Unauthorized
+
+  /admin/users/{email}:
+    get:
+      tags: [Admin]
+      summary: Get a single user's full stats
+      security:
+        - adminKey: []
+      parameters:
+        - in: path
+          name: email
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: User stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  user: { $ref: '#/components/schemas/UserAdminStats' }
+        '404':
+          description: User not found
+
+  /admin/cappm/price:
+    get:
+      tags: [Admin]
+      summary: Fetch historical asset price at a specific timestamp
+      description: Returns the close price of the 1-minute candle containing the given timestamp, sourced from the Coinbase Advanced Trade API (per-minute precision). Use this to get the correct settlement price for a stuck CAPPM market.
+      security:
+        - adminKey: []
+      parameters:
+        - in: query
+          name: asset
+          required: true
+          schema: { type: string, enum: [BTC, ETH, SOL] }
+        - in: query
+          name: at
+          required: true
+          schema: { type: string }
+          description: RFC3339 timestamp — use the market's end_time_utc value directly
+          example: "2026-04-25T15:38:42Z"
+      responses:
+        '200':
+          description: Price at that timestamp
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  asset: { type: string }
+                  at: { type: string }
+                  price_cents: { type: integer, example: 7771230 }
+                  price_usd: { type: string, example: "77712.30" }
+        '400':
+          description: Missing or malformed parameters
+        '502':
+          description: Coinbase API unreachable or returned no candle data
+
+  /admin/markets/{id}/cappm-settle:
+    post:
+      tags: [Admin]
+      summary: Force-settle a stuck CAPPM market
+      description: Manually triggers on-chain settlement for a CAPPM market the auto-settler failed to resolve. Use GET /admin/cappm/price to look up the correct price for the market's end_time_utc, then pass it here. Submits the Solana settlement tx, updates the DB, and distributes payouts.
+      security:
+        - adminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+          example: CAPPM_dSYVoqW2LJ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [end_price_cents]
+              properties:
+                end_price_cents:
+                  type: integer
+                  description: Settlement price in USD cents
+                  example: 7771230
+      responses:
+        '200':
+          description: Settlement submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  market_id: { type: string }
+                  end_price_cents: { type: integer }
+        '400':
+          description: Invalid request or market already resolved
+        '500':
+          description: On-chain settlement transaction failed
+
+  /admin/markets/search:
+    get:
+      tags: [Admin]
+      summary: Search markets by ID or transaction hash
+      security:
+        - adminKey: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string }
+          description: Searches market ID, creation_tx_hash, and settlement_tx_hash (ILIKE, max 50 results)
+        - in: query
+          name: type
+          schema: { type: string, enum: [CAPPM, GEM] }
+      responses:
+        '200':
+          description: Matching markets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  markets: { type: array, items: { $ref: '#/components/schemas/Market' } }
+                  count: { type: integer }
+        '400':
+          description: q is required

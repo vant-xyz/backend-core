@@ -217,7 +217,7 @@ func fetchMinutePriceCents(asset string, at time.Time) (uint64, error) {
 
 func GetMomentumPrice(asset string) (uint64, error) {
 	lookback := time.Now().UTC().Add(-momentumLookbackSecs * time.Second)
-	return fetchSpotPriceCents(asset, lookback)
+	return fetchMinutePriceCents(asset, lookback)
 }
 
 func GetATRVolatilityFactor(asset string, durationSeconds uint64, fallback float64) float64 {
