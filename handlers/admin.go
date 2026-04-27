@@ -174,7 +174,7 @@ func GetMarketStats(c *gin.Context) {
 			for _, sp := range settled {
 				isWinner := (market.Outcome == models.OutcomeYes && sp.Side == models.OrderSideYes) ||
 					(market.Outcome == models.OutcomeNo && sp.Side == models.OrderSideNo)
-				entry := gin.H{"username": sp.Username, "side": string(sp.Side), "shares": sp.Shares, "payout": sp.Payout}
+				entry := gin.H{"email": sp.UserEmail, "username": sp.Username, "side": string(sp.Side), "shares": sp.Shares, "payout": sp.Payout}
 				if isWinner {
 					winners = append(winners, entry)
 				} else {
@@ -325,6 +325,60 @@ func GetAllMarkets(c *gin.Context) {
 	})
 }
 
+func GetCAPPMPrice(c *gin.Context) {
+	asset := c.Query("asset")
+	atStr := c.Query("at")
+	if asset == "" || atStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "asset and at query params required"})
+		return
+	}
+
+	at, err := time.Parse(time.RFC3339, atStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "at must be RFC3339 e.g. 2026-04-25T15:38:42Z"})
+		return
+	}
+
+	priceCents, err := marketsvc.GetHistoricalPrice(asset, at)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "price fetch failed: " + err.Error()})
+		return
+	}
+
+	dollars := priceCents / 100
+	cents := priceCents % 100
+	c.JSON(http.StatusOK, gin.H{
+		"success":     true,
+		"asset":       asset,
+		"at":          at.UTC().Format(time.RFC3339),
+		"price_cents": priceCents,
+		"price_usd":   fmt.Sprintf("%d.%02d", dollars, cents),
+	})
+}
+
+func ForceSettleCAPPM(c *gin.Context) {
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "market ID required"})
+		return
+	}
+
+	var req struct {
+		EndPriceCents uint64 `json:"end_price_cents" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "end_price_cents (integer) required"})
+		return
+	}
+
+	if err := marketsvc.SettleCAPPM(c.Request.Context(), marketID, req.EndPriceCents); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "settlement failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "market_id": marketID, "end_price_cents": req.EndPriceCents})
+}
+
 func GetCAPPMStatus(c *gin.Context) {
 	enabled := os.Getenv("ENABLE_AUTO_CURATED_CAPPMS") == "true"
 	mode := "SETTLEMENT_ONLY"
@@ -408,6 +462,50 @@ func GetAllOrders(c *gin.Context) {
 		"orders":  orders,
 		"count":   len(orders),
 	})
+}
+
+func GetAdminUsers(c *gin.Context) {
+	search := c.Query("q")
+	sortBy := c.Query("sort")
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+		if page < 1 {
+			page = 1
+		}
+	}
+	offset := (page - 1) * pageSize
+
+	users, total, err := db.GetAdminUsers(c.Request.Context(), search, sortBy, pageSize, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch users: " + err.Error()})
+		return
+	}
+	if users == nil {
+		users = []db.UserAdminStats{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"users":   users,
+		"total":   total,
+		"page":    page,
+		"pages":   (total + int64(pageSize) - 1) / int64(pageSize),
+	})
+}
+
+func GetAdminUser(c *gin.Context) {
+	email := c.Param("email")
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "email required"})
+		return
+	}
+	u, err := db.GetAdminUserByEmail(c.Request.Context(), email)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "user": u})
 }
 
 func AdminUploadImage(c *gin.Context) {

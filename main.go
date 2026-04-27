@@ -176,7 +176,11 @@ func main() {
 		admin.GET("/orders", handlers.GetAllOrders)
 		admin.GET("/users/:email/exposure", handlers.GetUserExposure)
 		admin.GET("/cappm/status", handlers.GetCAPPMStatus)
+		admin.GET("/cappm/price", handlers.GetCAPPMPrice)
+		admin.POST("/markets/:id/cappm-settle", handlers.ForceSettleCAPPM)
 		admin.GET("/overview", handlers.GetOverview)
+		admin.GET("/users", handlers.GetAdminUsers)
+		admin.GET("/users/:email", handlers.GetAdminUser)
 	}
 
 	port := os.Getenv("PORT")
