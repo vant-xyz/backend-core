@@ -38,6 +38,10 @@ type SendTransactionEmailRequest struct {
 	TxID      string  `json:"txId"`
 	TxType    string  `json:"txType"`
 	Amount    float64 `json:"amount"`
+	FeeAmount float64 `json:"feeAmount,omitempty"`
+	FeeRate   float64 `json:"feeRate,omitempty"`
+	FeeChain  string  `json:"feeChain,omitempty"`
+	NetAmount float64 `json:"netAmount,omitempty"`
 	Currency  string  `json:"currency"`
 	Nature    string  `json:"nature"`
 	Status    string  `json:"status"`
@@ -106,6 +110,10 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 		TxID:      tx.ID,
 		TxType:    tx.Type,
 		Amount:    tx.Amount,
+		FeeAmount: tx.FeeAmount,
+		FeeRate:   tx.FeeRate,
+		FeeChain:  tx.FeeChain,
+		NetAmount: tx.Amount - tx.FeeAmount,
 		Currency:  tx.Currency,
 		Nature:    tx.Nature,
 		Status:    tx.Status,
