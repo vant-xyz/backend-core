@@ -48,9 +48,15 @@ func CreateExecutableQuote(ctx context.Context, marketID, userEmail string, side
 	if err != nil {
 		return nil, err
 	}
+	if err := globalRiskState.canReserve(marketID, side, reservation.TotalCost, reservation.EstimatedShares); err != nil {
+		GetMatchingEngine().ReleaseQuote(marketID, reservation.ID)
+		return nil, err
+	}
+	globalRiskState.reserve(marketID, side, reservation.TotalCost, reservation.EstimatedShares)
 	go func(quoteID, quoteMarketID string) {
 		time.Sleep(quoteReservationTTL)
 		GetMatchingEngine().ReleaseQuote(quoteMarketID, quoteID)
+		globalRiskState.release(quoteMarketID, side, reservation.TotalCost, reservation.EstimatedShares)
 	}(reservation.ID, reservation.MarketID)
 	return &ExecutableQuote{
 		ID:              reservation.ID,
@@ -81,6 +87,9 @@ func AcceptExecutableQuote(ctx context.Context, input AcceptQuoteInput) (*models
 	}
 	if reservation.UserEmail != input.UserEmail {
 		return nil, nil, fmt.Errorf("quote does not belong to user")
+	}
+	if !globalRiskState.allowAccept(input.UserEmail) {
+		return nil, nil, fmt.Errorf("quote acceptance rate limit exceeded")
 	}
 
 	currency := orderBalanceCurrency(input.IsDemo)
@@ -129,6 +138,7 @@ func AcceptExecutableQuote(ctx context.Context, input AcceptQuoteInput) (*models
 		db.AsyncSyncFillToPG(order.ID, order.FilledQty, order.RemainingQty, order.Status)
 		return nil, nil, err
 	}
+	globalRiskState.release(input.MarketID, acceptedReservation.Side, acceptedReservation.TotalCost, acceptedReservation.EstimatedShares)
 
 	go persistOrderFill(order)
 

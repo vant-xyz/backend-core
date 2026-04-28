@@ -1629,6 +1629,11 @@ paths:
         Reserves live executable liquidity for a short TTL so the user can accept a
         locked quote without being repriced by intervening book changes. This is the
         authenticated version of the quote flow.
+
+        Risk controls apply:
+        - per-quote max guaranteed stake
+        - per-market guaranteed capacity
+        - per-side reserved share caps
       security:
         - apiKeyAuth: []
       parameters:
@@ -1665,7 +1670,7 @@ paths:
                   quote:
                     $ref: '#/components/schemas/ExecutableQuote'
         '400':
-          description: Validation error or insufficient liquidity
+          description: Validation error, risk-limit rejection, or insufficient liquidity
           content:
             application/json:
               schema:
@@ -1679,6 +1684,9 @@ paths:
         Accepts a previously reserved quote before its expiry and executes against the
         exact reserved liquidity slices. This is the guaranteed-fill path for bounded
         order sizes while the quote is still live.
+
+        Risk controls apply:
+        - per-user quote acceptance rate limit
       security:
         - apiKeyAuth: []
       parameters:
@@ -1714,7 +1722,7 @@ paths:
                   order:
                     $ref: '#/components/schemas/Order'
         '400':
-          description: Quote expired, invalid, or insufficient balance
+          description: Quote expired, invalid, rate-limited, or insufficient balance
           content:
             application/json:
               schema:

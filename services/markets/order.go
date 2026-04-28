@@ -66,6 +66,7 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 	} else {
 		lockedAmount, err = estimateMarketOrderCost(input.MarketID, input.Side, input.Quantity)
 		if err != nil || lockedAmount == 0 {
+			globalRiskState.recordNoLiquidity(input.MarketID)
 			return nil, fmt.Errorf("no liquidity available for market order on %s %s", input.MarketID, input.Side)
 		}
 	}
