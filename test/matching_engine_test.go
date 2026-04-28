@@ -607,3 +607,143 @@ func TestMultiOrderFill_OneNoFillsMultipleYes(t *testing.T) {
 		t.Errorf("Charlie remaining_qty = %.0f, want 50", charlieRemaining)
 	}
 }
+
+func TestClosePosition_FullClose_SetsClosedAndCreditsBalance(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 100.0)
+	bob := createTestUser(t, 100.0)
+	marketID := createTestMarket(t)
+	ctx := context.Background()
+
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 50,
+	}); err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 50,
+	}); err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(600 * time.Millisecond)
+
+	positions, err := marketsvc.GetUserPositions(ctx, alice, marketID)
+	if err != nil || len(positions) == 0 {
+		t.Fatalf("GetUserPositions: %v len=%d", err, len(positions))
+	}
+	pos := positions[0]
+	if pos.Status != models.PositionStatusActive {
+		t.Fatalf("position status=%s, want ACTIVE", pos.Status)
+	}
+	nairaBefore, _ := getBalance(t, alice)
+
+	updated, proceeds, err := marketsvc.ClosePosition(ctx, marketsvc.ClosePositionInput{
+		PositionID: pos.ID,
+		MarketID:   marketID,
+		UserEmail:  alice,
+	})
+	if err != nil {
+		t.Fatalf("ClosePosition: %v", err)
+	}
+	if proceeds <= 0 {
+		t.Fatalf("proceeds=%.2f, want > 0", proceeds)
+	}
+	if updated.Status != models.PositionStatusClosed {
+		t.Fatalf("updated status=%s, want CLOSED", updated.Status)
+	}
+	if updated.Shares != 0 {
+		t.Fatalf("updated shares=%.2f, want 0", updated.Shares)
+	}
+
+	var status string
+	var shares float64
+	if err := db.Pool.QueryRow(ctx, `SELECT status, shares FROM positions WHERE id = $1`, pos.ID).Scan(&status, &shares); err != nil {
+		t.Fatalf("position row read: %v", err)
+	}
+	if status != string(models.PositionStatusClosed) {
+		t.Fatalf("db status=%s, want %s", status, models.PositionStatusClosed)
+	}
+	if shares != 0 {
+		t.Fatalf("db shares=%.2f, want 0", shares)
+	}
+
+	nairaAfter, _ := getBalance(t, alice)
+	if nairaAfter <= nairaBefore {
+		t.Fatalf("naira after close %.2f should be greater than before %.2f", nairaAfter, nairaBefore)
+	}
+}
+
+func TestClosePosition_PartialClose_KeepsActiveAndReducesShares(t *testing.T) {
+	initTestDB(t)
+	initTestRedis(t)
+
+	alice := createTestUser(t, 200.0)
+	bob := createTestUser(t, 200.0)
+	marketID := createTestMarket(t)
+	ctx := context.Background()
+
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: alice, MarketID: marketID,
+		Side: models.OrderSideYes, Type: models.OrderTypeLimit,
+		Price: 0.65, Quantity: 100,
+	}); err != nil {
+		t.Fatalf("Alice PlaceOrder: %v", err)
+	}
+	if _, err := marketsvc.PlaceOrder(ctx, marketsvc.PlaceOrderInput{
+		UserEmail: bob, MarketID: marketID,
+		Side: models.OrderSideNo, Type: models.OrderTypeLimit,
+		Price: 0.35, Quantity: 100,
+	}); err != nil {
+		t.Fatalf("Bob PlaceOrder: %v", err)
+	}
+
+	time.Sleep(600 * time.Millisecond)
+
+	positions, err := marketsvc.GetUserPositions(ctx, alice, marketID)
+	if err != nil || len(positions) == 0 {
+		t.Fatalf("GetUserPositions: %v len=%d", err, len(positions))
+	}
+	pos := positions[0]
+	startShares := pos.Shares
+	if startShares < 40 {
+		t.Fatalf("unexpected start shares %.2f", startShares)
+	}
+
+	updated, proceeds, err := marketsvc.ClosePosition(ctx, marketsvc.ClosePositionInput{
+		PositionID: pos.ID,
+		MarketID:   marketID,
+		UserEmail:  alice,
+		Shares:     40,
+	})
+	if err != nil {
+		t.Fatalf("ClosePosition partial: %v", err)
+	}
+	if proceeds <= 0 {
+		t.Fatalf("proceeds=%.2f, want > 0", proceeds)
+	}
+	if updated.Status != models.PositionStatusActive {
+		t.Fatalf("updated status=%s, want ACTIVE", updated.Status)
+	}
+	if updated.Shares != startShares-40 {
+		t.Fatalf("updated shares=%.2f, want %.2f", updated.Shares, startShares-40)
+	}
+
+	var status string
+	var shares float64
+	if err := db.Pool.QueryRow(ctx, `SELECT status, shares FROM positions WHERE id = $1`, pos.ID).Scan(&status, &shares); err != nil {
+		t.Fatalf("position row read: %v", err)
+	}
+	if status != string(models.PositionStatusActive) {
+		t.Fatalf("db status=%s, want %s", status, models.PositionStatusActive)
+	}
+	if shares != startShares-40 {
+		t.Fatalf("db shares=%.2f, want %.2f", shares, startShares-40)
+	}
+}

@@ -89,6 +89,19 @@ func UpdatePosition(ctx context.Context, positionID string, shares, avgEntryPric
 	return err
 }
 
+func UpdatePositionAfterClose(ctx context.Context, positionID string, shares, realizedPnL, payoutAmount float64, status models.PositionStatus) error {
+	_, err := Pool.Exec(ctx, `
+		UPDATE positions
+		SET shares = $1,
+		    realized_pnl = realized_pnl + $2,
+		    payout_amount = payout_amount + $3,
+		    status = $4,
+		    updated_at = NOW()
+		WHERE id = $5
+	`, shares, realizedPnL, payoutAmount, string(status), positionID)
+	return err
+}
+
 func SettlePositionRecord(ctx context.Context, positionID string, payout, realizedPnL float64) error {
 	_, err := Pool.Exec(ctx, `
 		UPDATE positions

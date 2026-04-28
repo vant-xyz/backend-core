@@ -111,6 +111,63 @@ func SettlePosition(ctx context.Context, positionID string, outcome models.Marke
 	return nil
 }
 
+type ClosePositionInput struct {
+	PositionID string
+	MarketID   string
+	UserEmail  string
+	Shares     float64
+}
+
+func ClosePosition(ctx context.Context, input ClosePositionInput) (*models.Position, float64, error) {
+	position, err := db.GetPositionByID(ctx, input.PositionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to fetch position %s: %w", input.PositionID, err)
+	}
+	if position.UserEmail != input.UserEmail {
+		return nil, 0, fmt.Errorf("position %s does not belong to user %s", input.PositionID, input.UserEmail)
+	}
+	if input.MarketID != "" && position.MarketID != input.MarketID {
+		return nil, 0, fmt.Errorf("position %s does not belong to market %s", input.PositionID, input.MarketID)
+	}
+	if position.Status != models.PositionStatusActive {
+		return nil, 0, fmt.Errorf("position %s is not active", input.PositionID)
+	}
+	if input.Shares <= 0 || input.Shares > position.Shares {
+		input.Shares = position.Shares
+	}
+
+	price := GetMatchingEngine().GetLastTradedPrice(position.MarketID)
+	if price == 0 {
+		levels := GetMatchingEngine().GetDepth(position.MarketID, position.Side, "bids")
+		if len(levels) > 0 {
+			price = levels[0].Price
+		}
+	}
+	if price == 0 {
+		price = position.AvgEntryPrice
+	}
+
+	proceeds := input.Shares * price
+	realizedPnL := proceeds - (input.Shares * position.AvgEntryPrice)
+	remainingShares := position.Shares - input.Shares
+	nextStatus := models.PositionStatusActive
+	if remainingShares == 0 {
+		nextStatus = models.PositionStatusClosed
+	}
+
+	if err := services.CreditBalance(ctx, position.UserEmail, proceeds, orderBalanceCurrency(position.IsDemo)); err != nil {
+		return nil, 0, fmt.Errorf("failed to credit close proceeds for position %s: %w", position.ID, err)
+	}
+	if err := db.UpdatePositionAfterClose(ctx, position.ID, remainingShares, realizedPnL, proceeds, nextStatus); err != nil {
+		return nil, 0, fmt.Errorf("failed to update closed position %s: %w", position.ID, err)
+	}
+	position.Shares = remainingShares
+	position.RealizedPnL += realizedPnL
+	position.PayoutAmount += proceeds
+	position.Status = nextStatus
+	return position, proceeds, nil
+}
+
 func GetUserPositions(ctx context.Context, userEmail, marketID string) ([]models.Position, error) {
 	return db.GetUserPositions(ctx, userEmail, marketID)
 }

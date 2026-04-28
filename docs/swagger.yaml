@@ -405,7 +405,7 @@ components:
           example: 150.00
         status:
           type: string
-          enum: [ACTIVE, SETTLED]
+          enum: [ACTIVE, CLOSED, SETTLED]
           example: "ACTIVE"
         quote_currency:
           type: string
@@ -1798,6 +1798,142 @@ paths:
                   count:
                     type: integer
 
+  /markets/{id}/buy:
+    post:
+      tags: [Orders]
+      summary: Buy YES or NO shares in a market
+      description: |
+        Thin wrapper over `POST /orders` that infers the market from the path.
+        Use this for product-level buy flows. The request body is the same as `POST /orders`
+        except `market_id` is omitted because it comes from the URL.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [side, type, quantity]
+              properties:
+                side:
+                  type: string
+                  enum: [YES, NO]
+                type:
+                  type: string
+                  enum: [LIMIT, MARKET]
+                price:
+                  type: number
+                quantity:
+                  type: number
+                is_demo:
+                  type: boolean
+                expires_at:
+                  type: integer
+      responses:
+        '200':
+          description: Order placed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  order:
+                    $ref: '#/components/schemas/Order'
+
+  /markets/{id}/sell:
+    post:
+      tags: [Orders]
+      summary: Sell (close) YES or NO position shares in a market
+      description: |
+        Product-level sell endpoint. This closes an existing active position for the caller.
+        It does not create a new opposite-side order.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [position_id]
+              properties:
+                position_id:
+                  type: string
+                  description: ID of the active position to close
+                shares:
+                  type: number
+                  description: Optional partial close quantity. Defaults to full position.
+      responses:
+        '200':
+          description: Position sold/closed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  position:
+                    $ref: '#/components/schemas/Position'
+                  proceeds:
+                    type: number
+
+  /positions/{id}/close:
+    post:
+      tags: [Orders]
+      summary: Close an active position
+      description: |
+        Closes an active YES or NO position by realizing it against the current market mark.
+        If `shares` is omitted, the full position is closed. This is the primitive for
+        "close my YES position" and "close my NO position" flows.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                shares:
+                  type: number
+                  description: Optional number of shares to close. Defaults to the full position.
+      responses:
+        '200':
+          description: Position closed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  position:
+                    $ref: '#/components/schemas/Position'
+                  proceeds:
+                    type: number
+
   /orders/{id}:
     delete:
       tags: [Orders]
@@ -1832,8 +1968,9 @@ paths:
     get:
       tags: [Orders]
       summary: Get user's positions
-      description: Returns all active and settled positions. A position is created when an order
-        is matched. At market settlement, positions are credited $1.00 per winning share.
+      description: Returns all active, closed, and settled positions. A position is created when
+        an order is matched. At market settlement, settled positions are credited $1.00 per
+        winning share.
       parameters:
         - name: market_id
           in: query

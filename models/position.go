@@ -6,6 +6,7 @@ type PositionStatus string
 
 const (
 	PositionStatusActive  PositionStatus = "ACTIVE"
+	PositionStatusClosed  PositionStatus = "CLOSED"
 	PositionStatusSettled PositionStatus = "SETTLED"
 )
 

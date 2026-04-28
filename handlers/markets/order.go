@@ -1,6 +1,7 @@
 package markets
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,62 +11,27 @@ import (
 	marketsvc "github.com/vant-xyz/backend-code/services/markets"
 )
 
+type orderRequest struct {
+	MarketID  string  `json:"market_id"`
+	Side      string  `json:"side" binding:"required"`
+	Type      string  `json:"type" binding:"required"`
+	Price     float64 `json:"price"`
+	Quantity  float64 `json:"quantity" binding:"required"`
+	IsDemo    bool    `json:"is_demo"`
+	ExpiresAt *int64  `json:"expires_at"`
+}
+
 func PlaceOrder(c *gin.Context) {
 	email, _ := c.Get("email")
 	userEmail := email.(string)
 
-	var req struct {
-		MarketID  string  `json:"market_id" binding:"required"`
-		Side      string  `json:"side" binding:"required"`
-		Type      string  `json:"type" binding:"required"`
-		Price     float64 `json:"price"`
-		Quantity  float64 `json:"quantity" binding:"required"`
-		IsDemo    bool    `json:"is_demo"`
-		ExpiresAt *int64  `json:"expires_at"`
-	}
+	var req orderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
 		return
 	}
 
-	side := models.OrderSide(req.Side)
-	if side != models.OrderSideYes && side != models.OrderSideNo {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "side must be YES or NO"})
-		return
-	}
-
-	orderType := models.OrderType(req.Type)
-	if orderType != models.OrderTypeLimit && orderType != models.OrderTypeMarket {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "type must be LIMIT or MARKET"})
-		return
-	}
-
-	if orderType == models.OrderTypeLimit && req.Price <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "price is required for limit orders"})
-		return
-	}
-
-	if req.Quantity <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "quantity must be positive"})
-		return
-	}
-
-	var expiresAt *time.Time
-	if req.ExpiresAt != nil {
-		t := time.Unix(*req.ExpiresAt, 0).UTC()
-		expiresAt = &t
-	}
-
-	order, err := marketsvc.PlaceOrder(c.Request.Context(), marketsvc.PlaceOrderInput{
-		UserEmail: userEmail,
-		MarketID:  req.MarketID,
-		Side:      side,
-		Type:      orderType,
-		Price:     req.Price,
-		Quantity:  req.Quantity,
-		IsDemo:    req.IsDemo,
-		ExpiresAt: expiresAt,
-	})
+	order, err := submitOrder(c, userEmail, req.MarketID, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -74,6 +40,119 @@ func PlaceOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"order":   order,
+	})
+}
+
+func BuyOrder(c *gin.Context) {
+	email, _ := c.Get("email")
+	userEmail := email.(string)
+
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	var req orderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
+		return
+	}
+
+	order, err := submitOrder(c, userEmail, marketID, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"order":   order,
+	})
+}
+
+func SellOrder(c *gin.Context) {
+	email, _ := c.Get("email")
+	userEmail := email.(string)
+
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	var req struct {
+		PositionID string  `json:"position_id" binding:"required"`
+		Shares     float64 `json:"shares"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
+		return
+	}
+
+	position, proceeds, err := marketsvc.ClosePosition(c.Request.Context(), marketsvc.ClosePositionInput{
+		PositionID: req.PositionID,
+		MarketID:   marketID,
+		UserEmail:  userEmail,
+		Shares:     req.Shares,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"position": position,
+		"proceeds": proceeds,
+	})
+}
+
+func submitOrder(c *gin.Context, userEmail, marketID string, req orderRequest) (*models.Order, error) {
+	side := models.OrderSide(req.Side)
+	if side != models.OrderSideYes && side != models.OrderSideNo {
+		return nil, fmt.Errorf("side must be YES or NO")
+	}
+
+	orderType := models.OrderType(req.Type)
+	if orderType != models.OrderTypeLimit && orderType != models.OrderTypeMarket {
+		return nil, fmt.Errorf("type must be LIMIT or MARKET")
+	}
+
+	if req.MarketID != "" && marketID != "" && req.MarketID != marketID {
+		return nil, fmt.Errorf("market_id must match path id")
+	}
+
+	if marketID == "" {
+		marketID = req.MarketID
+	}
+	if marketID == "" {
+		return nil, fmt.Errorf("market ID required")
+	}
+
+	if orderType == models.OrderTypeLimit && req.Price <= 0 {
+		return nil, fmt.Errorf("price is required for limit orders")
+	}
+
+	if req.Quantity <= 0 {
+		return nil, fmt.Errorf("quantity must be positive")
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresAt != nil {
+		t := time.Unix(*req.ExpiresAt, 0).UTC()
+		expiresAt = &t
+	}
+
+	return marketsvc.PlaceOrder(c.Request.Context(), marketsvc.PlaceOrderInput{
+		UserEmail: userEmail,
+		MarketID:  marketID,
+		Side:      side,
+		Type:      orderType,
+		Price:     req.Price,
+		Quantity:  req.Quantity,
+		IsDemo:    req.IsDemo,
+		ExpiresAt: expiresAt,
 	})
 }
 
