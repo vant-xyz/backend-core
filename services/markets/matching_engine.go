@@ -57,6 +57,7 @@ type MatchingEngine struct {
 var (
 	engineOnce   sync.Once
 	globalEngine *MatchingEngine
+	getOpenOrdersForMarketFn = db.GetOpenOrdersForMarket
 )
 
 func GetMatchingEngine() *MatchingEngine {
@@ -94,7 +95,7 @@ func (e *MatchingEngine) getOrCreateBook(marketID string) *marketBook {
 func (e *MatchingEngine) triggerRehydrate(marketID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	orders, err := db.GetOpenOrdersForMarket(ctx, marketID)
+	orders, err := getOpenOrdersForMarketFn(ctx, marketID)
 	if err != nil {
 		log.Printf("[Engine] Failed to fetch orders for rehydration %s: %v", marketID, err)
 		return
