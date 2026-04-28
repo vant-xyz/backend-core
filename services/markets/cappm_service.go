@@ -120,6 +120,7 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 			if time.Now().Before(existing.EndTimeUTC) {
 				cappmLog.Printf("[%s] Active market found: id=%s sleeping until %s",
 					loopID, existing.ID, existing.EndTimeUTC.Format(time.RFC3339))
+				StartLiquidityProvider(existing)
 				sleepUntilTime(existing.EndTimeUTC)
 				cappmLog.Printf("[%s] Market expired, creating next", loopID)
 			} else {
@@ -143,14 +144,13 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 			loopID, market.ID, market.TargetPrice, market.Direction,
 			market.EndTimeUTC.Format(time.RFC3339))
 
+		StartLiquidityProvider(market)
+
 		sleepUntilTime(market.EndTimeUTC)
 		cappmLog.Printf("[%s] Market expired, creating next", loopID)
 	}
 }
 
-// settleWithRetry retries settlement indefinitely with capped exponential backoff.
-// It never writes a fake outcome. The market stays in limbo until the network
-// recovers and settlement succeeds. On a production VPS this resolves in seconds.
 func settleWithRetry(loopID, marketID, asset string) {
 	attempt := 0
 	for {
@@ -294,8 +294,6 @@ func sleepUntilTime(t time.Time) {
 	}
 }
 
-// runCappmSettlementLoop only settles existing markets, doesn't create new ones.
-// This is used when ENABLE_AUTO_CURATED_CAPPMS=false.
 func runCappmSettlementLoop(asset assetDurationConfig, dur durationConfig) {
 	loopID := fmt.Sprintf("%s-%s-SETTLE", asset.Asset, dur.Label)
 	cappmLog.Printf("[%s] Settlement-only loop started", loopID)
@@ -315,6 +313,7 @@ func runCappmSettlementLoop(asset assetDurationConfig, dur durationConfig) {
 			if time.Now().Before(existing.EndTimeUTC) {
 				cappmLog.Printf("[%s] Active market found: id=%s, monitoring until %s",
 					loopID, existing.ID, existing.EndTimeUTC.Format(time.RFC3339))
+				StartLiquidityProvider(existing)
 				sleepUntilTime(existing.EndTimeUTC)
 				cappmLog.Printf("[%s] Market expired, settling", loopID)
 			} else {

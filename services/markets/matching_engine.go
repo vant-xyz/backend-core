@@ -36,6 +36,7 @@ const (
 	cmdCancel
 	cmdGetDepth
 	cmdGetLastPrice
+	cmdRehydrate
 )
 
 type engineCommand struct {
@@ -81,12 +82,27 @@ func (e *MatchingEngine) getOrCreateBook(marketID string) *marketBook {
 	}
 	book = &marketBook{
 		marketID: marketID,
-		inbound:  make(chan engineCommand, 512),
+		inbound:  make(chan engineCommand, 1024),
 		quit:     make(chan struct{}),
 	}
 	e.books[marketID] = book
 	go book.run()
+	go e.triggerRehydrate(marketID)
 	return book
+}
+
+func (e *MatchingEngine) triggerRehydrate(marketID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	orders, err := db.GetOpenOrdersForMarket(ctx, marketID)
+	if err != nil {
+		log.Printf("[Engine] Failed to fetch orders for rehydration %s: %v", marketID, err)
+		return
+	}
+	book := e.getOrCreateBook(marketID)
+	for i := range orders {
+		book.inbound <- engineCommand{typ: cmdRehydrate, order: &orders[i]}
+	}
 }
 
 func (e *MatchingEngine) Submit(order *models.Order) {
@@ -154,6 +170,8 @@ func (b *marketBook) handle(cmd engineCommand) {
 	switch cmd.typ {
 	case cmdSubmit:
 		b.processOrder(cmd.order)
+	case cmdRehydrate:
+		b.rehydrate(cmd.order)
 	case cmdCancel:
 		b.removeOrder(cmd.orderID)
 	case cmdGetDepth:
@@ -170,6 +188,10 @@ func (b *marketBook) processOrder(order *models.Order) {
 	case models.OrderTypeLimit:
 		b.executeLimitOrder(order)
 	}
+}
+
+func (b *marketBook) rehydrate(order *models.Order) {
+	b.addToBook(order)
 }
 
 func (b *marketBook) executeMarketOrder(order *models.Order) {
@@ -479,13 +501,9 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		fillID, taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*taker.Price); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for taker %s: %v", fillID, taker.UserEmail, err)
-	} else {
-		log.Printf("[Engine] CrossFill[%s]: locked balance deducted for taker %s", fillID, taker.UserEmail)
 	}
 	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*maker.Price); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for maker %s: %v", fillID, maker.UserEmail, err)
-	} else {
-		log.Printf("[Engine] CrossFill[%s]: locked balance deducted for maker %s", fillID, maker.UserEmail)
 	}
 
 	if _, err := UpsertPosition(ctx, UpsertPositionInput{
