@@ -297,6 +297,9 @@ func (b *marketBook) processOrder(order *models.Order) {
 }
 
 func (b *marketBook) rehydrate(order *models.Order) {
+	if b.hasOrder(order.ID) {
+		return
+	}
 	b.addToBook(order)
 }
 
@@ -411,10 +414,37 @@ func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
 }
 
 func (b *marketBook) addToBook(order *models.Order) {
+	if b.hasOrder(order.ID) {
+		return
+	}
 	entry := &engineOrder{order: order, createdAt: order.CreatedAt}
 	bids := b.bidsFor(order.Side)
 	*bids = append(*bids, entry)
 	sortEngineOrders(*bids)
+}
+
+func (b *marketBook) hasOrder(orderID string) bool {
+	for _, e := range b.yesBids {
+		if e.order.ID == orderID {
+			return true
+		}
+	}
+	for _, e := range b.yesAsks {
+		if e.order.ID == orderID {
+			return true
+		}
+	}
+	for _, e := range b.noBids {
+		if e.order.ID == orderID {
+			return true
+		}
+	}
+	for _, e := range b.noAsks {
+		if e.order.ID == orderID {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *marketBook) removeOrder(orderID string) {
