@@ -14,8 +14,9 @@ import (
 )
 
 type engineOrder struct {
-	order     *models.Order
-	createdAt time.Time
+	order       *models.Order
+	createdAt   time.Time
+	reservedQty float64
 }
 
 type marketBook struct {
@@ -25,8 +26,36 @@ type marketBook struct {
 	noBids          []*engineOrder
 	noAsks          []*engineOrder
 	lastTradedPrice float64
+	reservations    map[string]*quoteReservation
 	inbound         chan engineCommand
 	quit            chan struct{}
+}
+
+type executableOrder struct {
+	entry         *engineOrder
+	price         float64
+	complementary bool
+}
+
+type reservedSlice struct {
+	entry         *engineOrder
+	quantity      float64
+	price         float64
+	complementary bool
+}
+
+type quoteReservation struct {
+	ID              string
+	MarketID        string
+	UserEmail       string
+	Side            models.OrderSide
+	Stake           float64
+	AvgPrice        float64
+	EstimatedShares float64
+	FillsCompletely bool
+	TotalCost       float64
+	ExpiresAt       time.Time
+	Slices          []reservedSlice
 }
 
 type commandType int
@@ -37,16 +66,39 @@ const (
 	cmdGetDepth
 	cmdGetLastPrice
 	cmdRehydrate
+	cmdReserveQuote
+	cmdAcceptQuote
+	cmdReleaseQuote
+	cmdGetQuote
 )
 
 type engineCommand struct {
-	typ      commandType
-	order    *models.Order
-	orderID  string
-	side     models.OrderSide
-	bookSide string
-	levels   int
-	respCh   chan interface{}
+	typ       commandType
+	order     *models.Order
+	orderID   string
+	side      models.OrderSide
+	bookSide  string
+	levels    int
+	stake     float64
+	userEmail string
+	ttl       time.Duration
+	quoteID   string
+	respCh    chan interface{}
+}
+
+type reserveQuoteResult struct {
+	reservation *quoteReservation
+	err         error
+}
+
+type acceptQuoteResult struct {
+	reservation *quoteReservation
+	err         error
+}
+
+type getQuoteResult struct {
+	reservation *quoteReservation
+	err         error
 }
 
 type MatchingEngine struct {
@@ -55,8 +107,8 @@ type MatchingEngine struct {
 }
 
 var (
-	engineOnce   sync.Once
-	globalEngine *MatchingEngine
+	engineOnce               sync.Once
+	globalEngine             *MatchingEngine
 	getOpenOrdersForMarketFn = db.GetOpenOrdersForMarket
 )
 
@@ -82,9 +134,10 @@ func (e *MatchingEngine) getOrCreateBook(marketID string) *marketBook {
 		return book
 	}
 	book = &marketBook{
-		marketID: marketID,
-		inbound:  make(chan engineCommand, 1024),
-		quit:     make(chan struct{}),
+		marketID:     marketID,
+		reservations: make(map[string]*quoteReservation),
+		inbound:      make(chan engineCommand, 1024),
+		quit:         make(chan struct{}),
 	}
 	e.books[marketID] = book
 	go book.run()
@@ -146,6 +199,47 @@ func (e *MatchingEngine) GetLastTradedPrice(marketID string) float64 {
 	return 0
 }
 
+func (e *MatchingEngine) ReserveQuote(marketID, userEmail string, side models.OrderSide, stake float64, ttl time.Duration) (*quoteReservation, error) {
+	book := e.getOrCreateBook(marketID)
+	respCh := make(chan interface{}, 1)
+	book.inbound <- engineCommand{
+		typ:       cmdReserveQuote,
+		side:      side,
+		stake:     stake,
+		userEmail: userEmail,
+		ttl:       ttl,
+		respCh:    respCh,
+	}
+	resp := (<-respCh).(reserveQuoteResult)
+	return resp.reservation, resp.err
+}
+
+func (e *MatchingEngine) AcceptQuote(marketID, quoteID string, order *models.Order) (*quoteReservation, error) {
+	book := e.getOrCreateBook(marketID)
+	respCh := make(chan interface{}, 1)
+	book.inbound <- engineCommand{
+		typ:     cmdAcceptQuote,
+		quoteID: quoteID,
+		order:   order,
+		respCh:  respCh,
+	}
+	resp := (<-respCh).(acceptQuoteResult)
+	return resp.reservation, resp.err
+}
+
+func (e *MatchingEngine) ReleaseQuote(marketID, quoteID string) {
+	book := e.getOrCreateBook(marketID)
+	book.inbound <- engineCommand{typ: cmdReleaseQuote, quoteID: quoteID}
+}
+
+func (e *MatchingEngine) GetQuote(marketID, quoteID string) (*quoteReservation, error) {
+	book := e.getOrCreateBook(marketID)
+	respCh := make(chan interface{}, 1)
+	book.inbound <- engineCommand{typ: cmdGetQuote, quoteID: quoteID, respCh: respCh}
+	resp := (<-respCh).(getQuoteResult)
+	return resp.reservation, resp.err
+}
+
 func (e *MatchingEngine) CloseMarket(marketID string) {
 	e.mu.Lock()
 	book, ok := e.books[marketID]
@@ -179,6 +273,17 @@ func (b *marketBook) handle(cmd engineCommand) {
 		cmd.respCh <- b.depth(cmd.side, cmd.bookSide, cmd.levels)
 	case cmdGetLastPrice:
 		cmd.respCh <- b.lastTradedPrice
+	case cmdReserveQuote:
+		reservation, err := b.reserveQuote(cmd.userEmail, cmd.side, cmd.stake, cmd.ttl)
+		cmd.respCh <- reserveQuoteResult{reservation: reservation, err: err}
+	case cmdAcceptQuote:
+		reservation, err := b.acceptQuote(cmd.quoteID, cmd.order)
+		cmd.respCh <- acceptQuoteResult{reservation: reservation, err: err}
+	case cmdReleaseQuote:
+		b.releaseQuote(cmd.quoteID)
+	case cmdGetQuote:
+		reservation, err := b.getQuote(cmd.quoteID)
+		cmd.respCh <- getQuoteResult{reservation: reservation, err: err}
 	}
 }
 
@@ -196,21 +301,31 @@ func (b *marketBook) rehydrate(order *models.Order) {
 }
 
 func (b *marketBook) executeMarketOrder(order *models.Order) {
-	asks := b.asksFor(order.Side)
-	if len(*asks) == 0 {
+	asks := b.executableAsks(order.Side)
+	if len(asks) == 0 {
 		log.Printf("[Engine] Market order %s has no liquidity — cancelling", order.ID)
 		go cancelOrderAsync(order.ID, order.UserEmail)
 		return
 	}
 	remaining := order.RemainingQty
-	for len(*asks) > 0 && remaining > 0 {
-		best := (*asks)[0]
-		fillQty := min64(remaining, best.order.RemainingQty)
-		b.executeFill(order, best.order, fillQty, best.order.Price)
-		remaining -= fillQty
-		if best.order.RemainingQty == 0 {
-			*asks = (*asks)[1:]
+	for len(asks) > 0 && remaining > 0 {
+		best := asks[0]
+		fillQty := min64(remaining, b.availableQty(best.entry))
+		if fillQty <= 0 {
+			asks = asks[1:]
+			continue
 		}
+		if best.complementary {
+			order.Price = best.price
+			b.executeCrossFill(order, best.entry.order, fillQty)
+		} else {
+			b.executeFill(order, best.entry.order, fillQty, best.price)
+		}
+		remaining -= fillQty
+		if best.entry.order.RemainingQty == 0 {
+			b.removeFilledOrder(best.entry)
+		}
+		asks = b.executableAsks(order.Side)
 	}
 	order.RemainingQty = remaining
 	if remaining == 0 {
@@ -222,31 +337,32 @@ func (b *marketBook) executeMarketOrder(order *models.Order) {
 }
 
 func (b *marketBook) executeLimitOrder(order *models.Order) {
-	asks := b.asksFor(order.Side)
+	asks := b.executableAsks(order.Side)
 	remaining := order.RemainingQty
-	for len(*asks) > 0 && remaining > 0 {
-		best := (*asks)[0]
-		if order.Price < best.order.Price {
+	for len(asks) > 0 && remaining > 0 {
+		best := asks[0]
+		if order.Price < best.price {
 			break
 		}
-		fillQty := min64(remaining, best.order.RemainingQty)
-		b.executeFill(order, best.order, fillQty, best.order.Price)
-		remaining -= fillQty
-		if best.order.RemainingQty == 0 {
-			*asks = (*asks)[1:]
+		fillQty := min64(remaining, b.availableQty(best.entry))
+		if fillQty <= 0 {
+			asks = asks[1:]
+			continue
 		}
+		if best.complementary {
+			b.executeCrossFill(order, best.entry.order, fillQty)
+		} else {
+			b.executeFill(order, best.entry.order, fillQty, best.price)
+		}
+		remaining -= fillQty
+		if best.entry.order.RemainingQty == 0 {
+			b.removeFilledOrder(best.entry)
+		}
+		asks = b.executableAsks(order.Side)
 	}
 	order.RemainingQty = remaining
 	if remaining == 0 {
 		order.Status = models.OrderStatusFilled
-		go persistOrderFill(order)
-		return
-	}
-	if order.FilledQty > 0 {
-		order.Status = models.OrderStatusPartiallyFilled
-	}
-	b.executeCrossMatch(order)
-	if order.RemainingQty == 0 {
 		go persistOrderFill(order)
 		return
 	}
@@ -271,29 +387,6 @@ func (b *marketBook) executeFill(taker, maker *models.Order, qty, price float64)
 	log.Printf("[Engine] Fill: market=%s taker=%s maker=%s qty=%.2f price=%.2f",
 		b.marketID, taker.ID, maker.ID, qty, price)
 	go persistFillAsync(taker, maker, qty, price, b.marketID)
-}
-
-func (b *marketBook) executeCrossMatch(order *models.Order) {
-	var counterBids *[]*engineOrder
-	if order.Side == models.OrderSideYes {
-		counterBids = &b.noBids
-	} else {
-		counterBids = &b.yesBids
-	}
-	i := 0
-	for i < len(*counterBids) && order.RemainingQty > 0 {
-		counter := (*counterBids)[i]
-		if order.Price+counter.order.Price < 1.0-1e-9 {
-			break
-		}
-		fillQty := min64(order.RemainingQty, counter.order.RemainingQty)
-		b.executeCrossFill(order, counter.order, fillQty)
-		if counter.order.RemainingQty == 0 {
-			*counterBids = append((*counterBids)[:i], (*counterBids)[i+1:]...)
-		} else {
-			i++
-		}
-	}
 }
 
 func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
@@ -321,12 +414,7 @@ func (b *marketBook) addToBook(order *models.Order) {
 	entry := &engineOrder{order: order, createdAt: order.CreatedAt}
 	bids := b.bidsFor(order.Side)
 	*bids = append(*bids, entry)
-	sort.Slice(*bids, func(i, j int) bool {
-		if (*bids)[i].order.Price != (*bids)[j].order.Price {
-			return (*bids)[i].order.Price > (*bids)[j].order.Price
-		}
-		return (*bids)[i].createdAt.Before((*bids)[j].createdAt)
-	})
+	sortEngineOrders(*bids)
 }
 
 func (b *marketBook) removeOrder(orderID string) {
@@ -345,41 +433,134 @@ func (b *marketBook) removeOrder(orderID string) {
 }
 
 func (b *marketBook) depth(side models.OrderSide, bookSide string, maxLevels int) []OrderbookLevel {
-	var source []*engineOrder
+	var source []OrderbookLevel
+	if bookSide == "bids" {
+		source = aggregateLevels(b.rawBookLevels(side, "bids"), true)
+	} else {
+		source = aggregateLevels(b.executableAsks(side), false)
+	}
+	if len(source) > maxLevels {
+		source = source[:maxLevels]
+	}
+	return source
+}
+
+func (b *marketBook) rawBookLevels(side models.OrderSide, bookSide string) []*engineOrder {
 	if side == models.OrderSideYes {
 		if bookSide == "bids" {
-			source = b.yesBids
-		} else {
-			source = b.yesAsks
+			return b.yesBids
 		}
-	} else {
-		if bookSide == "bids" {
-			source = b.noBids
-		} else {
-			source = b.noAsks
-		}
-	}
-	priceMap := make(map[float64]*OrderbookLevel)
-	priceOrder := []float64{}
-	for _, e := range source {
-		p := e.order.Price
-		if _, exists := priceMap[p]; !exists {
-			priceMap[p] = &OrderbookLevel{Price: p}
-			priceOrder = append(priceOrder, p)
-		}
-		priceMap[p].Quantity += e.order.RemainingQty
-		priceMap[p].Orders++
+		return b.yesAsks
 	}
 	if bookSide == "bids" {
+		return b.noBids
+	}
+	return b.noAsks
+}
+
+func (b *marketBook) executableAsks(side models.OrderSide) []executableOrder {
+	rawAsks := *b.asksFor(side)
+	counterBids := *b.counterBids(side)
+	asks := make([]executableOrder, 0, len(rawAsks)+len(counterBids))
+	for _, entry := range rawAsks {
+		if b.availableQty(entry) <= 0 {
+			continue
+		}
+		asks = append(asks, executableOrder{
+			entry: entry,
+			price: entry.order.Price,
+		})
+	}
+	for _, entry := range counterBids {
+		if b.availableQty(entry) <= 0 {
+			continue
+		}
+		asks = append(asks, executableOrder{
+			entry:         entry,
+			price:         1 - entry.order.Price,
+			complementary: true,
+		})
+	}
+	sort.Slice(asks, func(i, j int) bool {
+		if asks[i].price != asks[j].price {
+			return asks[i].price < asks[j].price
+		}
+		return asks[i].entry.createdAt.Before(asks[j].entry.createdAt)
+	})
+	return asks
+}
+
+func (b *marketBook) availableQty(entry *engineOrder) float64 {
+	available := entry.order.RemainingQty - entry.reservedQty
+	if available < 0 {
+		return 0
+	}
+	return available
+}
+
+func (b *marketBook) counterBids(side models.OrderSide) *[]*engineOrder {
+	if side == models.OrderSideYes {
+		return &b.noBids
+	}
+	return &b.yesBids
+}
+
+func (b *marketBook) removeFilledOrder(target *engineOrder) {
+	removeEntry := func(book *[]*engineOrder) bool {
+		for i, entry := range *book {
+			if entry == target {
+				*book = append((*book)[:i], (*book)[i+1:]...)
+				return true
+			}
+		}
+		return false
+	}
+	if removeEntry(&b.yesBids) || removeEntry(&b.yesAsks) || removeEntry(&b.noBids) {
+		return
+	}
+	removeEntry(&b.noAsks)
+}
+
+func aggregateLevels(source interface{}, descending bool) []OrderbookLevel {
+	priceMap := make(map[float64]*OrderbookLevel)
+	priceOrder := []float64{}
+	switch entries := source.(type) {
+	case []*engineOrder:
+		for _, e := range entries {
+			qty := e.order.RemainingQty
+			if qty <= 0 {
+				continue
+			}
+			p := e.order.Price
+			if _, exists := priceMap[p]; !exists {
+				priceMap[p] = &OrderbookLevel{Price: p}
+				priceOrder = append(priceOrder, p)
+			}
+			priceMap[p].Quantity += qty
+			priceMap[p].Orders++
+		}
+	case []executableOrder:
+		for _, e := range entries {
+			qty := e.entry.order.RemainingQty - e.entry.reservedQty
+			if qty <= 0 {
+				continue
+			}
+			p := e.price
+			if _, exists := priceMap[p]; !exists {
+				priceMap[p] = &OrderbookLevel{Price: p}
+				priceOrder = append(priceOrder, p)
+			}
+			priceMap[p].Quantity += qty
+			priceMap[p].Orders++
+		}
+	}
+	if descending {
 		sort.Slice(priceOrder, func(i, j int) bool { return priceOrder[i] > priceOrder[j] })
 	} else {
 		sort.Slice(priceOrder, func(i, j int) bool { return priceOrder[i] < priceOrder[j] })
 	}
-	levels := make([]OrderbookLevel, 0, maxLevels)
+	levels := make([]OrderbookLevel, 0, len(priceOrder))
 	for _, p := range priceOrder {
-		if len(levels) >= maxLevels {
-			break
-		}
 		levels = append(levels, *priceMap[p])
 	}
 	return levels
@@ -399,7 +580,139 @@ func (b *marketBook) asksFor(side models.OrderSide) *[]*engineOrder {
 	return &b.noAsks
 }
 
+func (b *marketBook) reserveQuote(userEmail string, side models.OrderSide, stake float64, ttl time.Duration) (*quoteReservation, error) {
+	if stake <= 0 {
+		return nil, fmt.Errorf("stake must be positive")
+	}
+	asks := b.executableAsks(side)
+	if len(asks) == 0 {
+		return nil, fmt.Errorf("no liquidity available for %s", side)
+	}
+	remainingStake := stake
+	totalShares := 0.0
+	totalCost := 0.0
+	slices := make([]reservedSlice, 0)
+	for _, ask := range asks {
+		if remainingStake <= 0 {
+			break
+		}
+		availableQty := b.availableQty(ask.entry)
+		if availableQty <= 0 {
+			continue
+		}
+		maxCost := ask.price * availableQty
+		reserveQty := availableQty
+		reserveCost := maxCost
+		if remainingStake < maxCost {
+			reserveCost = remainingStake
+			reserveQty = remainingStake / ask.price
+		}
+		ask.entry.reservedQty += reserveQty
+		slices = append(slices, reservedSlice{
+			entry:         ask.entry,
+			quantity:      reserveQty,
+			price:         ask.price,
+			complementary: ask.complementary,
+		})
+		totalShares += reserveQty
+		totalCost += reserveCost
+		remainingStake -= reserveCost
+	}
+	if totalShares == 0 {
+		return nil, fmt.Errorf("no liquidity available for %s", side)
+	}
+	reservation := &quoteReservation{
+		ID:              fmt.Sprintf("QTE_%s", time.Now().UTC().Format("20060102150405.000000000")),
+		MarketID:        b.marketID,
+		UserEmail:       userEmail,
+		Side:            side,
+		Stake:           stake,
+		AvgPrice:        totalCost / totalShares,
+		EstimatedShares: totalShares,
+		FillsCompletely: remainingStake <= 1e-9,
+		TotalCost:       totalCost,
+		ExpiresAt:       time.Now().UTC().Add(ttl),
+		Slices:          slices,
+	}
+	b.reservations[reservation.ID] = reservation
+	return reservation, nil
+}
+
+func (b *marketBook) releaseQuote(quoteID string) {
+	reservation, ok := b.reservations[quoteID]
+	if !ok {
+		return
+	}
+	for _, slice := range reservation.Slices {
+		slice.entry.reservedQty -= slice.quantity
+		if slice.entry.reservedQty < 0 {
+			slice.entry.reservedQty = 0
+		}
+	}
+	delete(b.reservations, quoteID)
+}
+
+func (b *marketBook) acceptQuote(quoteID string, order *models.Order) (*quoteReservation, error) {
+	reservation, ok := b.reservations[quoteID]
+	if !ok {
+		return nil, fmt.Errorf("quote not found")
+	}
+	if time.Now().UTC().After(reservation.ExpiresAt) {
+		b.releaseQuote(quoteID)
+		return nil, fmt.Errorf("quote expired")
+	}
+	if reservation.UserEmail != order.UserEmail {
+		return nil, fmt.Errorf("quote does not belong to user")
+	}
+	for _, slice := range reservation.Slices {
+		if slice.entry.reservedQty+1e-9 < slice.quantity || slice.entry.order.RemainingQty+1e-9 < slice.quantity {
+			b.releaseQuote(quoteID)
+			return nil, fmt.Errorf("reserved liquidity is no longer available")
+		}
+	}
+	for _, slice := range reservation.Slices {
+		slice.entry.reservedQty -= slice.quantity
+		order.Price = slice.price
+		if slice.complementary {
+			b.executeCrossFill(order, slice.entry.order, slice.quantity)
+		} else {
+			b.executeFill(order, slice.entry.order, slice.quantity, slice.price)
+		}
+		if slice.entry.order.RemainingQty == 0 {
+			b.removeFilledOrder(slice.entry)
+		}
+	}
+	order.RemainingQty = max64(0, order.Quantity-order.FilledQty)
+	if order.RemainingQty == 0 {
+		order.Status = models.OrderStatusFilled
+	} else if order.FilledQty > 0 {
+		order.Status = models.OrderStatusPartiallyFilled
+	}
+	delete(b.reservations, quoteID)
+	return reservation, nil
+}
+
+func (b *marketBook) getQuote(quoteID string) (*quoteReservation, error) {
+	reservation, ok := b.reservations[quoteID]
+	if !ok {
+		return nil, fmt.Errorf("quote not found")
+	}
+	return reservation, nil
+}
+
+func sortEngineOrders(orders []*engineOrder) {
+	sort.Slice(orders, func(i, j int) bool {
+		if orders[i].order.Price != orders[j].order.Price {
+			return orders[i].order.Price > orders[j].order.Price
+		}
+		return orders[i].createdAt.Before(orders[j].createdAt)
+	})
+}
+
 func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID string) {
+	if !persistenceReady() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -466,7 +779,10 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 }
 
 func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID string) {
-	fillID := fmt.Sprintf("%s+%s@%.2f", taker.ID[:8], maker.ID[:8], qty)
+	if !persistenceReady() {
+		return
+	}
+	fillID := fmt.Sprintf("%s+%s@%.2f", shortOrderID(taker.ID), shortOrderID(maker.ID), qty)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -536,6 +852,9 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 }
 
 func persistOrderFill(order *models.Order) {
+	if !persistenceReady() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := db.RedisUpdateOrderFill(ctx, order.ID, order.FilledQty, order.RemainingQty, order.Status); err != nil {
@@ -545,6 +864,9 @@ func persistOrderFill(order *models.Order) {
 }
 
 func cancelOrderAsync(orderID, userEmail string) {
+	if !persistenceReady() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := CancelOrder(ctx, orderID, userEmail); err != nil {
@@ -557,4 +879,22 @@ func min64(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func max64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func shortOrderID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+func persistenceReady() bool {
+	return db.Pool != nil && db.RDB != nil
 }

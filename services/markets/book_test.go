@@ -762,3 +762,104 @@ func TestLastTradedPrice_UpdatesOnEachFill(t *testing.T) {
 		t.Errorf("lastTradedPrice after eating two levels = %.0f, want 64 (last fill level)", book.lastTradedPrice)
 	}
 }
+
+func TestDepth_AsksDerivedFromComplementaryBids(t *testing.T) {
+	book := newTestBook()
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+	book.addToBook(makeOrder("NO2", "NO", "LIMIT", 0.40, 25))
+
+	asks := book.depth(models.OrderSideYes, "asks", 10)
+
+	if len(asks) != 2 {
+		t.Fatalf("expected 2 derived YES ask levels, got %d", len(asks))
+	}
+	if asks[0].Price != 0.60 {
+		t.Errorf("top derived ask price = %.2f, want 0.60", asks[0].Price)
+	}
+	if asks[0].Quantity != 25 {
+		t.Errorf("top derived ask quantity = %.0f, want 25", asks[0].Quantity)
+	}
+	if asks[1].Price != 0.65 {
+		t.Errorf("second derived ask price = %.2f, want 0.65", asks[1].Price)
+	}
+	if asks[1].Quantity != 50 {
+		t.Errorf("second derived ask quantity = %.0f, want 50", asks[1].Quantity)
+	}
+}
+
+func TestReserveQuote_UsesComplementaryLiquidityAndHidesReservedDepth(t *testing.T) {
+	book := newTestBook()
+	book.reservations = make(map[string]*quoteReservation)
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+
+	reservation, err := book.reserveQuote("alice@vant.xyz", models.OrderSideYes, 13.0, 15*time.Second)
+	if err != nil {
+		t.Fatalf("reserveQuote returned error: %v", err)
+	}
+	if reservation == nil {
+		t.Fatal("expected reservation")
+	}
+	if reservation.EstimatedShares != 20 {
+		t.Errorf("estimated shares = %.2f, want 20", reservation.EstimatedShares)
+	}
+	if reservation.AvgPrice != 0.65 {
+		t.Errorf("avg price = %.2f, want 0.65", reservation.AvgPrice)
+	}
+
+	asksAfterReserve := book.depth(models.OrderSideYes, "asks", 10)
+	if len(asksAfterReserve) != 1 {
+		t.Fatalf("expected one derived ask level after reserve, got %d", len(asksAfterReserve))
+	}
+	if asksAfterReserve[0].Quantity != 30 {
+		t.Errorf("remaining visible ask quantity = %.0f, want 30", asksAfterReserve[0].Quantity)
+	}
+
+	book.releaseQuote(reservation.ID)
+	asksAfterRelease := book.depth(models.OrderSideYes, "asks", 10)
+	if len(asksAfterRelease) != 1 {
+		t.Fatalf("expected one derived ask level after release, got %d", len(asksAfterRelease))
+	}
+	if asksAfterRelease[0].Quantity != 50 {
+		t.Errorf("restored visible ask quantity = %.0f, want 50", asksAfterRelease[0].Quantity)
+	}
+}
+
+func TestAcceptQuote_FillsReservedLiquidity(t *testing.T) {
+	book := newTestBook()
+	book.reservations = make(map[string]*quoteReservation)
+	book.addToBook(makeOrder("NO1", "NO", "LIMIT", 0.35, 50))
+
+	reservation, err := book.reserveQuote("alice@vant.xyz", models.OrderSideYes, 13.0, 15*time.Second)
+	if err != nil {
+		t.Fatalf("reserveQuote returned error: %v", err)
+	}
+
+	order := makeOrder("YES1", "YES", "MARKET", 0, reservation.EstimatedShares)
+	order.UserEmail = "alice@vant.xyz"
+
+	accepted, err := book.acceptQuote(reservation.ID, order)
+	if err != nil {
+		t.Fatalf("acceptQuote returned error: %v", err)
+	}
+	if accepted.ID != reservation.ID {
+		t.Errorf("accepted reservation id = %s, want %s", accepted.ID, reservation.ID)
+	}
+	if order.Status != models.OrderStatusFilled {
+		t.Errorf("order status = %s, want FILLED", order.Status)
+	}
+	if order.FilledQty != 20 {
+		t.Errorf("filled qty = %.0f, want 20", order.FilledQty)
+	}
+	if order.RemainingQty != 0 {
+		t.Errorf("remaining qty = %.0f, want 0", order.RemainingQty)
+	}
+	if len(book.noBids) != 1 {
+		t.Fatalf("expected complementary NO order to remain partially filled")
+	}
+	if book.noBids[0].order.RemainingQty != 30 {
+		t.Errorf("complementary remaining qty = %.0f, want 30", book.noBids[0].order.RemainingQty)
+	}
+	if _, err := book.getQuote(reservation.ID); err == nil {
+		t.Error("accepted quote should be removed from reservations")
+	}
+}

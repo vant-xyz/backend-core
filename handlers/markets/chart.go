@@ -94,6 +94,84 @@ func GetMarketFillPreview(c *gin.Context) {
 	})
 }
 
+func ReserveMarketQuote(c *gin.Context) {
+	email, _ := c.Get("email")
+	userEmail := email.(string)
+
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	var req struct {
+		Side  string  `json:"side" binding:"required"`
+		Stake float64 `json:"stake" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
+		return
+	}
+
+	side := models.OrderSide(req.Side)
+	if side != models.OrderSideYes && side != models.OrderSideNo {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "side must be YES or NO"})
+		return
+	}
+	if req.Stake <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "stake must be a positive number"})
+		return
+	}
+
+	quote, err := marketsvc.CreateExecutableQuote(c.Request.Context(), marketID, userEmail, side, req.Stake)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"quote":   quote,
+	})
+}
+
+func AcceptMarketQuote(c *gin.Context) {
+	email, _ := c.Get("email")
+	userEmail := email.(string)
+
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	var req struct {
+		QuoteID string `json:"quote_id" binding:"required"`
+		IsDemo  bool   `json:"is_demo"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
+		return
+	}
+
+	order, quote, err := marketsvc.AcceptExecutableQuote(c.Request.Context(), marketsvc.AcceptQuoteInput{
+		QuoteID:   req.QuoteID,
+		UserEmail: userEmail,
+		MarketID:  marketID,
+		IsDemo:    req.IsDemo,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"quote":   quote,
+		"order":   order,
+	})
+}
+
 type tradeEntry struct {
 	ID       string           `json:"id"`
 	Side     models.OrderSide `json:"side"`

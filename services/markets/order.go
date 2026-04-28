@@ -64,11 +64,10 @@ func PlaceOrder(ctx context.Context, input PlaceOrderInput) (*models.Order, erro
 	if input.Type == models.OrderTypeLimit {
 		lockedAmount = input.Price * input.Quantity
 	} else {
-		bestAsk, err := getBestAsk(input.MarketID, input.Side)
-		if err != nil || bestAsk == 0 {
+		lockedAmount, err = estimateMarketOrderCost(input.MarketID, input.Side, input.Quantity)
+		if err != nil || lockedAmount == 0 {
 			return nil, fmt.Errorf("no liquidity available for market order on %s %s", input.MarketID, input.Side)
 		}
-		lockedAmount = bestAsk * input.Quantity
 	}
 
 	if err := services.LockBalance(ctx, input.UserEmail, lockedAmount, currency); err != nil {
@@ -224,4 +223,28 @@ func getBestAsk(marketID string, side models.OrderSide) (float64, error) {
 		return 0, nil
 	}
 	return asks[0].Price, nil
+}
+
+func estimateMarketOrderCost(marketID string, side models.OrderSide, quantity float64) (float64, error) {
+	if quantity <= 0 {
+		return 0, nil
+	}
+	asks := GetMatchingEngine().GetDepth(marketID, side, "asks")
+	if len(asks) == 0 {
+		return 0, nil
+	}
+	remainingQty := quantity
+	totalCost := 0.0
+	for _, level := range asks {
+		if remainingQty <= 0 {
+			break
+		}
+		fillQty := min64(remainingQty, level.Quantity)
+		totalCost += fillQty * level.Price
+		remainingQty -= fillQty
+	}
+	if totalCost == 0 {
+		return 0, nil
+	}
+	return totalCost, nil
 }

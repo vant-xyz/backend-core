@@ -142,14 +142,16 @@ func main() {
 		auth.POST("/transactions/email", handlers.SendTransactionEmail)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
 
-			// Orders & positions
-			auth.POST("/orders", handlersmarkets.PlaceOrder)
-			auth.POST("/markets/:id/buy", handlersmarkets.BuyOrder)
-			auth.POST("/markets/:id/sell", handlersmarkets.SellOrder)
-			auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
-			auth.GET("/orders", handlersmarkets.GetUserOrders)
-			auth.GET("/positions", handlersmarkets.GetUserPositions)
-			auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
+		// Orders & positions
+		auth.POST("/orders", handlersmarkets.PlaceOrder)
+		auth.POST("/markets/:id/buy", handlersmarkets.BuyOrder)
+		auth.POST("/markets/:id/sell", handlersmarkets.SellOrder)
+		auth.POST("/markets/:id/quote", handlersmarkets.ReserveMarketQuote)
+		auth.POST("/markets/:id/quote/accept", handlersmarkets.AcceptMarketQuote)
+		auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
+		auth.GET("/orders", handlersmarkets.GetUserOrders)
+		auth.GET("/positions", handlersmarkets.GetUserPositions)
+		auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
 
 		// WebSockets
 		// /ws             → live price feed (BTC, ETH, SOL every 5s)

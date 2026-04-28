@@ -31,6 +31,13 @@ info:
     2. For a **market order**: use `estimated_shares` as `quantity`.
     3. For a **limit order**: choose your trigger price `P`, then `quantity = stake / P`.
 
+    ## Executable Quote Flow (Reserved Fill)
+    Use this for tighter UX on immediate execution for bounded size:
+    1. Call `POST /markets/{id}/quote` with `{ side, stake }` to reserve executable liquidity.
+    2. Receive `quote.id` and `quote.expires_at`.
+    3. Call `POST /markets/{id}/quote/accept` with `{ quote_id }` before expiry.
+    4. Backend executes against reserved slices and returns the created order.
+
     ## WebSockets
     - `GET /ws` — Authenticated. Pushes live BTC/ETH/SOL prices every 5s and
       `BALANCE_UPDATE` events when user balance changes.
@@ -68,6 +75,12 @@ components:
       name: X-API-Key
       description: >
         Server-wide API key. Required on all routes when `API_MASTER_KEY` is set
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        Alias for `masterApiKey`, used by operation-level route docs.
         in the server environment. Exempt routes: `GET /health`, `GET /docs*`.
 
   schemas:
@@ -542,6 +555,36 @@ components:
           type: number
           description: Total cost consumed from the orderbook (may be less than stake if partial fill)
           example: 10.00
+
+    ExecutableQuote:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "QTE_20260428153045000000000"
+        market_id:
+          type: string
+        side:
+          type: string
+          enum: [YES, NO]
+        stake:
+          type: number
+          example: 10.00
+        avg_price:
+          type: number
+          example: 0.63
+        estimated_shares:
+          type: number
+          example: 15.87
+        fills_completely:
+          type: boolean
+          example: true
+        total_cost:
+          type: number
+          example: 10.00
+        expires_at:
+          type: string
+          format: date-time
 
     TradeEntry:
       type: object
@@ -1575,6 +1618,103 @@ paths:
                     $ref: '#/components/schemas/FillPreview'
         '400':
           description: Invalid side or stake
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Orders]
+      summary: Reserve an executable quote
+      description: |
+        Reserves live executable liquidity for a short TTL so the user can accept a
+        locked quote without being repriced by intervening book changes. This is the
+        authenticated version of the quote flow.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [side, stake]
+              properties:
+                side:
+                  type: string
+                  enum: [YES, NO]
+                stake:
+                  type: number
+                  description: Dollar amount to reserve against current depth
+                  example: 10.00
+      responses:
+        '200':
+          description: Executable quote reserved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  quote:
+                    $ref: '#/components/schemas/ExecutableQuote'
+        '400':
+          description: Validation error or insufficient liquidity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /markets/{id}/quote/accept:
+    post:
+      tags: [Orders]
+      summary: Accept a reserved executable quote
+      description: |
+        Accepts a previously reserved quote before its expiry and executes against the
+        exact reserved liquidity slices. This is the guaranteed-fill path for bounded
+        order sizes while the quote is still live.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quote_id]
+              properties:
+                quote_id:
+                  type: string
+                is_demo:
+                  type: boolean
+      responses:
+        '200':
+          description: Reserved quote executed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  quote:
+                    $ref: '#/components/schemas/ExecutableQuote'
+                  order:
+                    $ref: '#/components/schemas/Order'
+        '400':
+          description: Quote expired, invalid, or insufficient balance
           content:
             application/json:
               schema:
