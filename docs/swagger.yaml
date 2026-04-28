@@ -38,6 +38,12 @@ info:
     3. Call `POST /markets/{id}/quote/accept` with `{ quote_id }` before expiry.
     4. Backend executes against reserved slices and returns the created order.
 
+    ## Fee Schedule (User Visible)
+    - Deposit: Solana 0.1%, Base 0.5%
+    - Withdraw: Solana 0%, Base 0.5%
+    - Sell: Solana 0.09%, Base 0.1%
+    - Fee details are returned on transaction records (`fee_amount`, `fee_rate`, `fee_chain`).
+
     ## WebSockets
     - `GET /ws` — Authenticated. Pushes live BTC/ETH/SOL prices every 5s and
       `BALANCE_UPDATE` events when user balance changes.
@@ -239,6 +245,21 @@ components:
         tx_hash:
           type: string
           description: Solana or EVM transaction hash, if applicable
+        fee_amount:
+          type: number
+          description: Fee charged for this transaction in the same unit as `amount`
+          example: 0.05
+        fee_rate:
+          type: number
+          description: Applied fee rate as a decimal (e.g. 0.001 = 0.1%)
+          example: 0.001
+        fee_chain:
+          type: string
+          enum: [solana, base]
+          description: Chain fee schedule used for this transaction
+        fee_wallet:
+          type: string
+          description: Destination fee wallet address/pubkey used for this transaction
         created_at:
           type: string
           format: date-time
@@ -1183,8 +1204,13 @@ paths:
       description: |
         Converts a crypto asset to USD in the user's vault balance.
         For SOL assets, this triggers an on-chain transfer to the Vantic vault.
+        For Base assets, this triggers an on-chain transfer to the Base vault.
         The operation is asynchronous — the response is immediate but the balance
         credit happens in a background goroutine.
+
+        Sell fees:
+        - Solana assets: 0.09%
+        - Base assets: 0.1%
 
         **Assets:** `sol`, `eth_base`, `usdc_sol`, `usdc_base`, `demo_sol`, `demo_usdc_sol`
       requestBody:
@@ -1223,15 +1249,18 @@ paths:
   /balance/withdraw:
     post:
       tags: [Balance]
-      summary: Withdraw USD vault balance to an external Solana wallet
+      summary: Withdraw USD vault balance to an external wallet
       description: |
-        Deducts from the user's USD vault balance and sends USDC to the specified
-        Solana address via MagicBlock Private Payments — the transfer is not visible
-        on the public ledger.
+        Deducts from the user's USD vault balance and sends funds to the specified
+        destination address.
 
         The response is immediate. The on-chain transfer happens asynchronously in
         the background. If the transfer fails, the deducted amount is automatically
         reversed. A `BALANCE_UPDATE` WebSocket event is broadcast on completion.
+
+        Withdrawal fees:
+        - Solana destination: 0%
+        - Base destination: 0.5%
       requestBody:
         required: true
         content:
@@ -1246,7 +1275,7 @@ paths:
                   example: 50.00
                 destination_address:
                   type: string
-                  description: Solana public key to receive the USDC
+                  description: Destination wallet address (Solana pubkey or Base EVM address)
                   example: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
       responses:
         '200':
