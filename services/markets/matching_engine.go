@@ -483,9 +483,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 	if err := db.RedisUpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
 		log.Printf("[Engine] CrossFill: Redis fill update failed for taker %s: %v", taker.ID, err)
 	}
-	if err := db.UpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
-		log.Printf("[Engine] CrossFill: PG fill update failed for taker %s: %v", taker.ID, err)
-	}
+	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
 
 	makerStatus := models.OrderStatusPartiallyFilled
 	if maker.RemainingQty == 0 {
@@ -494,9 +492,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 	if err := db.RedisUpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
 		log.Printf("[Engine] CrossFill: Redis fill update failed for maker %s: %v", maker.ID, err)
 	}
-	if err := db.UpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
-		log.Printf("[Engine] CrossFill: PG fill update failed for maker %s: %v", maker.ID, err)
-	}
+	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
 
 	log.Printf("[Engine] CrossFill[%s]: deducting — taker=%s amount=%.4f maker=%s amount=%.4f",
 		fillID, taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)

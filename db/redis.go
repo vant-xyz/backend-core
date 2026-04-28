@@ -101,8 +101,22 @@ func AsyncSyncFillToPG(id string, filledQty, remainingQty float64, status models
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := UpdateOrderFill(ctx, id, filledQty, remainingQty, status); err != nil {
-			log.Printf("[Redis] PG fill sync failed for order %s: %v", id, err)
+		var lastErr error
+		for i := 0; i < 30; i++ {
+			if err := UpdateOrderFill(ctx, id, filledQty, remainingQty, status); err == nil {
+				return
+			} else {
+				lastErr = err
+			}
+			select {
+			case <-ctx.Done():
+				log.Printf("[Redis] PG fill sync context done for order %s: %v", id, lastErr)
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		if lastErr != nil {
+			log.Printf("[Redis] PG fill sync failed for order %s after retries: %v", id, lastErr)
 		}
 	}()
 }

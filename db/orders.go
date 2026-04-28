@@ -48,12 +48,18 @@ func GetOrderByID(ctx context.Context, orderID string) (*models.Order, error) {
 }
 
 func UpdateOrderFill(ctx context.Context, orderID string, filledQty, remainingQty float64, status models.OrderStatus) error {
-	_, err := Pool.Exec(ctx, `
+	tag, err := Pool.Exec(ctx, `
 		UPDATE orders
 		SET filled_qty = $1, remaining_qty = $2, status = $3, updated_at = NOW()
 		WHERE id = $4 AND status NOT IN ('FILLED', 'CANCELLED')
 	`, filledQty, remainingQty, string(status), orderID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no updatable order row found for %s", orderID)
+	}
+	return nil
 }
 
 func UpdateOrderStatus(ctx context.Context, orderID string, status models.OrderStatus) error {
