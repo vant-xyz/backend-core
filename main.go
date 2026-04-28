@@ -135,6 +135,7 @@ func main() {
 		auth.POST("/auth/logout", handlers.Logout)
 
 		auth.GET("/balance", handlers.GetUserBalance)
+		auth.GET("/balance/wsol", handlers.GetUserWSOLBalance)
 		auth.GET("/balance/sync", handlers.SyncBalance)
 		auth.POST("/balance/sell", handlers.SellAsset)
 		auth.POST("/balance/withdraw", handlers.WithdrawBalance)

@@ -40,12 +40,14 @@ func HandleInternalDeposit(c *gin.Context) {
 
 	isDemo := strings.Contains(req.Network, "devnet") || strings.Contains(req.Network, "testnet")
 
+	baseAsset := normalizeDepositAsset(req.Asset)
+
 	nature := "real"
-	dbField := req.Asset
+	dbField := baseAsset
 	if isDemo {
 		nature = "demo"
-		if !strings.HasPrefix(req.Asset, "demo_") {
-			dbField = "demo_" + req.Asset
+		if !strings.HasPrefix(baseAsset, "demo_") {
+			dbField = "demo_" + baseAsset
 		}
 	}
 
@@ -77,6 +79,15 @@ func HandleInternalDeposit(c *gin.Context) {
 	services.PriceHub.BroadcastToUser(req.Email, "BALANCE_UPDATE")
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Deposit processed"})
+}
+
+func normalizeDepositAsset(asset string) string {
+	switch asset {
+	case "wsol_sol", "wsol":
+		return "sol"
+	default:
+		return asset
+	}
 }
 
 func HandleIndexerWhitelist(c *gin.Context) {

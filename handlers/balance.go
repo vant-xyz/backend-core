@@ -107,6 +107,31 @@ func GetUserBalance(c *gin.Context) {
 	})
 }
 
+func GetUserWSOLBalance(c *gin.Context) {
+	email, _ := c.Get("email")
+
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email.(string))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found"})
+		return
+	}
+
+	devnetWSOL, mainnetWSOL, balErr := services.GetWSOLBalances(wallet.SolPublicKey)
+	if balErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch WSOL balances: " + balErr.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"wallet":  wallet.SolPublicKey,
+		"wsol": gin.H{
+			"devnet":  devnetWSOL,
+			"mainnet": mainnetWSOL,
+		},
+	})
+}
+
 func SyncBalance(c *gin.Context) {
 	email, _ := c.Get("email")
 

@@ -19,6 +19,7 @@ import (
 )
 
 const rpcTimeout = 10 * time.Second
+const defaultWSOLMint = "So11111111111111111111111111111111111111112"
 
 func GetSolBalance(pubKey string) (float64, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
@@ -158,6 +159,41 @@ func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error
 
 	log.Printf("[SPL] Final balances — USDC: %f, USDT: %f, USDG: %f", usdc, usdt, usdg)
 	return usdc, usdt, usdg, err
+}
+
+func GetWSOLBalances(walletPubKey string) (devnetWSOL, mainnetWSOL float64, err error) {
+	devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
+	mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
+
+	devnetMint := os.Getenv("DEVNET_SOL_WSOL_MINT")
+	if devnetMint == "" {
+		devnetMint = defaultWSOLMint
+	}
+	mainnetMint := os.Getenv("MAINNET_SOL_WSOL_MINT")
+	if mainnetMint == "" {
+		mainnetMint = defaultWSOLMint
+	}
+
+	var firstErr error
+	if devnetRPC != "" {
+		bal, fetchErr := GetSPLBalance(walletPubKey, devnetMint, devnetRPC, "WSOL_DEVNET")
+		if fetchErr != nil {
+			firstErr = fetchErr
+		} else {
+			devnetWSOL = bal
+		}
+	}
+
+	if mainnetRPC != "" {
+		bal, fetchErr := GetSPLBalance(walletPubKey, mainnetMint, mainnetRPC, "WSOL_MAINNET")
+		if fetchErr != nil && firstErr == nil {
+			firstErr = fetchErr
+		} else if fetchErr == nil {
+			mainnetWSOL = bal
+		}
+	}
+
+	return devnetWSOL, mainnetWSOL, firstErr
 }
 
 func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64) (string, error) {

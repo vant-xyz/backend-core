@@ -1143,6 +1143,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /balance/wsol:
+    get:
+      tags: [Balance]
+      summary: Get WSOL balances for user wallet on devnet and mainnet
+      description: |
+        Returns live wrapped SOL balances from Solana token accounts for the authenticated
+        user's custodial SOL wallet on both devnet and mainnet.
+      responses:
+        '200':
+          description: WSOL balances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  wallet:
+                    type: string
+                  wsol:
+                    type: object
+                    properties:
+                      devnet:
+                        type: number
+                      mainnet:
+                        type: number
+        '404':
+          description: Wallet not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /balance/sell:
     post:
       tags: [Balance]
