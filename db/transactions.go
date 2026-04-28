@@ -9,11 +9,14 @@ import (
 
 func SaveTransaction(ctx context.Context, tx models.Transaction) error {
 	_, err := Pool.Exec(ctx, `
-		INSERT INTO transactions (id, user_email, amount, currency, nature, type, status, tx_hash, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO transactions (
+			id, user_email, amount, fee_amount, fee_rate, fee_chain, fee_wallet,
+			currency, nature, type, status, tx_hash, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (id) DO NOTHING
-	`, tx.ID, tx.UserEmail, tx.Amount, tx.Currency, tx.Nature,
-		tx.Type, tx.Status, tx.TxHash, tx.CreatedAt)
+	`, tx.ID, tx.UserEmail, tx.Amount, tx.FeeAmount, tx.FeeRate, tx.FeeChain, tx.FeeWallet,
+		tx.Currency, tx.Nature, tx.Type, tx.Status, tx.TxHash, tx.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save transaction %s: %w", tx.ID, err)
 	}
@@ -22,7 +25,7 @@ func SaveTransaction(ctx context.Context, tx models.Transaction) error {
 
 func GetTransactionsByEmail(ctx context.Context, email string) ([]models.Transaction, error) {
 	rows, err := Pool.Query(ctx, `
-		SELECT id, user_email, amount, currency, nature, type, status, tx_hash, created_at
+		SELECT id, user_email, amount, fee_amount, fee_rate, fee_chain, fee_wallet, currency, nature, type, status, tx_hash, created_at
 		FROM transactions
 		WHERE user_email = $1
 		ORDER BY created_at DESC
@@ -36,7 +39,7 @@ func GetTransactionsByEmail(ctx context.Context, email string) ([]models.Transac
 	for rows.Next() {
 		var tx models.Transaction
 		if err := rows.Scan(
-			&tx.ID, &tx.UserEmail, &tx.Amount, &tx.Currency,
+			&tx.ID, &tx.UserEmail, &tx.Amount, &tx.FeeAmount, &tx.FeeRate, &tx.FeeChain, &tx.FeeWallet, &tx.Currency,
 			&tx.Nature, &tx.Type, &tx.Status, &tx.TxHash, &tx.CreatedAt,
 		); err != nil {
 			continue

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,16 @@ func WithdrawBalance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
 		return
 	}
+	withdrawChain := feeChainSolana
+	if strings.HasPrefix(strings.ToLower(req.DestinationAddress), "0x") {
+		withdrawChain = feeChainBase
+	}
+	withdrawRate := feeRateForWithdraw(withdrawChain)
+	netPayout, feeAmount := applyFee(req.Amount, withdrawRate)
+	if netPayout <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount too small after fee"})
+		return
+	}
 
 	if err := db.RunBalanceTransaction(c.Request.Context(), email, func(balance *models.Balance) error {
 		if balance.Naira < req.Amount {
@@ -55,19 +66,24 @@ func WithdrawBalance(c *gin.Context) {
 			})
 		}
 
-		sig, err := markets.WithdrawFunds(bgCtx, req.DestinationAddress, req.Amount)
+		sig, err := markets.WithdrawFunds(bgCtx, req.DestinationAddress, netPayout)
 		if err != nil {
 			log.Printf("[Withdraw] Private payment failed for %s to %s: %v — reversing deduction", email, req.DestinationAddress, err)
 			reverse()
 			return
 		}
 
-		log.Printf("[Withdraw] Private payment sent for %s to %s sig=%s", email, req.DestinationAddress, sig)
+		log.Printf("[Withdraw] Private payment sent for %s to %s sig=%s gross=%.8f fee=%.8f net=%.8f fee_wallet=%s",
+			email, req.DestinationAddress, sig, req.Amount, feeAmount, netPayout, feeWalletForChain(withdrawChain))
 
 		transaction := models.Transaction{
 			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
 			UserEmail: email,
 			Amount:    req.Amount,
+			FeeAmount: feeAmount,
+			FeeRate:   withdrawRate,
+			FeeChain:  string(withdrawChain),
+			FeeWallet: feeWalletForChain(withdrawChain),
 			Currency:  "USD",
 			Nature:    "real",
 			Type:      "withdrawal",
@@ -83,8 +99,12 @@ func WithdrawBalance(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Withdrawal initiated",
+		"success":      true,
+		"message":      "Withdrawal initiated",
+		"gross_amount": req.Amount,
+		"fee_amount":   feeAmount,
+		"net_amount":   netPayout,
+		"fee_wallet":   feeWalletForChain(withdrawChain),
 	})
 }
 
@@ -238,7 +258,14 @@ func SellAsset(c *gin.Context) {
 		return
 	}
 
-	receiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
+	grossReceiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
+	sellChain := chainFromAsset(req.Asset)
+	sellRate := feeRateForSell(req.Asset)
+	netReceiveNaira, feeAmount := applyFee(grossReceiveNaira, sellRate)
+	if netReceiveNaira <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount too small after fee"})
+		return
+	}
 
 	if err = db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to initiate deduction"})
@@ -270,6 +297,13 @@ func SellAsset(c *gin.Context) {
 				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
+		} else if req.Asset == "eth_base" || req.Asset == "usdc_base" {
+			txHash, err = services.TransferBaseAssetToVault(wallet.BasePrivateKey, req.Asset, req.Amount)
+			if err != nil {
+				log.Printf("[Sell] Base vault transfer failed for %s asset=%s, reversing deduction: %v", email, req.Asset, err)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
+				return
+			}
 		}
 
 		nairaField := "naira"
@@ -277,14 +311,20 @@ func SellAsset(c *gin.Context) {
 			nairaField = "demo_naira"
 		}
 
-		if err = db.UpdateBalance(bgCtx, email, nairaField, receiveNaira); err != nil {
+		if err = db.UpdateBalance(bgCtx, email, nairaField, netReceiveNaira); err != nil {
 			log.Printf("[Sell] CRITICAL: failed to credit USD after successful on-chain move for %s: %v", email, err)
 		}
+		log.Printf("[Sell] Fee applied email=%s asset=%s gross=%.8f fee=%.8f net=%.8f fee_wallet=%s",
+			email, req.Asset, grossReceiveNaira, feeAmount, netReceiveNaira, feeWalletForChain(sellChain))
 
 		transaction := models.Transaction{
 			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
 			UserEmail: email,
-			Amount:    receiveNaira,
+			Amount:    netReceiveNaira,
+			FeeAmount: feeAmount,
+			FeeRate:   sellRate,
+			FeeChain:  string(sellChain),
+			FeeWallet: feeWalletForChain(sellChain),
 			Currency:  "USD",
 			Nature:    req.Nature,
 			Type:      "sell",
@@ -304,8 +344,12 @@ func SellAsset(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Sell initiated successfully",
+		"success":       true,
+		"message":       "Sell initiated successfully",
+		"gross_receive": grossReceiveNaira,
+		"fee_amount":    feeAmount,
+		"net_receive":   netReceiveNaira,
+		"fee_wallet":    feeWalletForChain(sellChain),
 	})
 }
 

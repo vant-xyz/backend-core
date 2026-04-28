@@ -39,8 +39,15 @@ func HandleInternalDeposit(c *gin.Context) {
 	}
 
 	isDemo := strings.Contains(req.Network, "devnet") || strings.Contains(req.Network, "testnet")
+	chain := chainFromNetwork(req.Network)
+	feeRate := feeRateForDeposit(chain)
 
 	baseAsset := normalizeDepositAsset(req.Asset)
+	netAmount, feeAmount := applyFee(req.Amount, feeRate)
+	if netAmount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Deposit amount too small after fee"})
+		return
+	}
 
 	nature := "real"
 	dbField := baseAsset
@@ -51,7 +58,7 @@ func HandleInternalDeposit(c *gin.Context) {
 		}
 	}
 
-	if err := db.UpdateBalance(c.Request.Context(), req.Email, dbField, req.Amount); err != nil {
+	if err := db.UpdateBalance(c.Request.Context(), req.Email, dbField, netAmount); err != nil {
 		log.Printf("[Deposit] Failed to update field %s for %s: %v", dbField, req.Email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update user balance"})
 		return
@@ -60,7 +67,11 @@ func HandleInternalDeposit(c *gin.Context) {
 	transaction := models.Transaction{
 		ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
 		UserEmail: req.Email,
-		Amount:    req.Amount,
+		Amount:    netAmount,
+		FeeAmount: feeAmount,
+		FeeRate:   feeRate,
+		FeeChain:  string(chain),
+		FeeWallet: feeWalletForChain(chain),
 		Currency:  req.Asset,
 		Nature:    nature,
 		Type:      "deposit",
@@ -76,9 +87,21 @@ func HandleInternalDeposit(c *gin.Context) {
 		}
 	}(req.Email, transaction)
 
+	services.SweepDepositFeeOptimistic(req.Email, baseAsset, req.Network, feeAmount)
+
 	services.PriceHub.BroadcastToUser(req.Email, "BALANCE_UPDATE")
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Deposit processed"})
+	log.Printf("[Deposit] Fee applied email=%s asset=%s gross=%.8f fee=%.8f net=%.8f fee_wallet=%s",
+		req.Email, req.Asset, req.Amount, feeAmount, netAmount, feeWalletForChain(chain))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"message":      "Deposit processed",
+		"gross_amount": req.Amount,
+		"fee_amount":   feeAmount,
+		"net_amount":   netAmount,
+		"fee_wallet":   feeWalletForChain(chain),
+	})
 }
 
 func normalizeDepositAsset(asset string) string {
