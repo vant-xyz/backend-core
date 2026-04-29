@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 )
 
 const PRODUCTION = false
+
+const (
+	cappmMinYesProbability = 0.35
+	cappmMaxYesZScore      = 0.385320466
+)
 
 var cappmLog = log.New(os.Stdout, "[CAPPM-SERVICE] ", log.Ldate|log.Ltime|log.Lmicroseconds)
 
@@ -224,7 +230,7 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 		asset.Asset, dur.Label, volatilityFactor, dur.FallbackVolatilityFactor,
 		currentPriceCents, momentumPriceCents)
 
-	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, volatilityFactor)
+	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, dur.Seconds, volatilityFactor)
 	startTime := time.Now().UTC().Add(5 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -243,26 +249,174 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 	})
 }
 
-func calculateTarget(currentCents, momentumCents uint64, volatilityFactor float64) (models.MarketDirection, uint64) {
-	direction := models.DirectionAbove
-	if momentumCents < currentCents {
-		direction = models.DirectionBelow
-	}
-	offset := uint64(float64(currentCents) * volatilityFactor)
-	if offset == 0 {
-		offset = 1
-	}
-	var targetCents uint64
+func calculateTarget(currentCents, momentumCents, durationSeconds uint64, volatilityFactor float64) (models.MarketDirection, uint64) {
+	direction := selectCAPPMDirection(currentCents, momentumCents, durationSeconds)
+	distance := calculateCAPPMStrikeDistance(currentCents, durationSeconds, volatilityFactor)
+
 	if direction == models.DirectionAbove {
-		targetCents = currentCents + offset
-	} else {
-		if currentCents > offset {
-			targetCents = currentCents - offset
-		} else {
-			targetCents = 1
+		return direction, currentCents + distance
+	}
+	if currentCents > distance {
+		return direction, currentCents - distance
+	}
+	return direction, 1
+}
+
+func selectCAPPMDirection(currentCents, momentumCents, durationSeconds uint64) models.MarketDirection {
+	if currentCents > 0 {
+		deltaBps := (float64(momentumCents) - float64(currentCents)) / float64(currentCents) * 10000
+		threshold := directionMomentumThresholdBps(durationSeconds)
+		if deltaBps >= threshold {
+			return models.DirectionBelow
+		}
+		if deltaBps <= -threshold {
+			return models.DirectionAbove
 		}
 	}
-	return direction, targetCents
+
+	seed := (currentCents / 100) + (durationSeconds / 60)
+	if seed%2 == 0 {
+		return models.DirectionAbove
+	}
+	return models.DirectionBelow
+}
+
+func calculateCAPPMStrikeDistance(currentCents, durationSeconds uint64, volatilityFactor float64) uint64 {
+	if currentCents == 0 {
+		return 1
+	}
+
+	durationMultiplier := strikeDurationMultiplier(durationSeconds)
+	sigma := float64(currentCents) * volatilityFactor * durationMultiplier
+	if sigma < 1 {
+		sigma = 1
+	}
+
+	minDistance := float64(currentCents) * minDistanceBps(durationSeconds) / 10000.0
+	if minDistance < 1 {
+		minDistance = 1
+	}
+
+	maxDistanceByDuration := float64(currentCents) * maxDistanceBps(durationSeconds) / 10000.0
+	maxDistanceByBand := sigma * cappmMaxYesZScore
+
+	maxDistance := math.Min(maxDistanceByDuration, maxDistanceByBand)
+	if maxDistance < 1 {
+		maxDistance = 1
+	}
+	if maxDistance < minDistance {
+		minDistance = maxDistance
+	}
+
+	distance := sigma * targetSigmaMultiplier(durationSeconds)
+	if distance < minDistance {
+		distance = minDistance
+	}
+	if distance > maxDistance {
+		distance = maxDistance
+	}
+
+	if estimateCAPPMYesProbability(distance, sigma) < cappmMinYesProbability {
+		distance = math.Min(distance, sigma*cappmMaxYesZScore)
+	}
+
+	if distance < 1 {
+		distance = 1
+	}
+	return uint64(math.Round(distance))
+}
+
+func estimateCAPPMYesProbability(distance, sigma float64) float64 {
+	if sigma <= 0 {
+		return 0.5
+	}
+
+	z := distance / sigma
+	return 1 - 0.5*(1+math.Erf(z/math.Sqrt2))
+}
+
+func targetSigmaMultiplier(durationSeconds uint64) float64 {
+	switch {
+	case durationSeconds <= 300:
+		return 0.26
+	case durationSeconds <= 900:
+		return 0.28
+	case durationSeconds <= 3600:
+		return 0.30
+	default:
+		return 0.32
+	}
+}
+
+func strikeDurationMultiplier(durationSeconds uint64) float64 {
+	switch {
+	case durationSeconds <= 300:
+		return 0.45
+	case durationSeconds <= 900:
+		return 0.60
+	case durationSeconds <= 3600:
+		return 0.80
+	default:
+		return 1.00
+	}
+}
+
+func minDistanceBps(durationSeconds uint64) float64 {
+	switch {
+	case durationSeconds <= 300:
+		return 8
+	case durationSeconds <= 900:
+		return 12
+	case durationSeconds <= 3600:
+		return 18
+	default:
+		return 25
+	}
+}
+
+func maxDistanceBps(durationSeconds uint64) float64 {
+	switch {
+	case durationSeconds <= 300:
+		return 45
+	case durationSeconds <= 900:
+		return 65
+	case durationSeconds <= 3600:
+		return 100
+	default:
+		return 160
+	}
+}
+
+func directionMomentumThresholdBps(durationSeconds uint64) float64 {
+	switch {
+	case durationSeconds <= 300:
+		return 18
+	case durationSeconds <= 900:
+		return 14
+	case durationSeconds <= 3600:
+		return 10
+	default:
+		return 8
+	}
+}
+
+func durationLabelForSeconds(durationSeconds uint64) string {
+	switch durationSeconds {
+	case 180:
+		return "3min"
+	case 300:
+		return "5min"
+	case 900:
+		return "15min"
+	case 1800:
+		return "30min"
+	case 3600:
+		return "1hr"
+	case 21600:
+		return "6hr"
+	default:
+		return fmt.Sprintf("%ds", durationSeconds)
+	}
 }
 
 func buildMarketTitle(asset string, direction models.MarketDirection, targetCents uint64, durationLabel string) string {

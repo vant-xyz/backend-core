@@ -7,67 +7,100 @@ import (
 	"github.com/vant-xyz/backend-code/models"
 )
 
-// ── calculateTarget ───────────────────────────────────────────────────────────
+// ── direction selection ──────────────────────────────────────────────────────
 
-func TestCalculateTarget_MomentumHigher_DirectionAbove(t *testing.T) {
-	dir, _ := calculateTarget(10000, 11000, 0.01)
+func TestSelectCAPPMDirection_StrongMomentumDrivesDirection(t *testing.T) {
+	dir := selectCAPPMDirection(10000, 12000, 300)
 	if dir != models.DirectionAbove {
-		t.Errorf("expected DirectionAbove when momentum > current, got %s", dir)
+		t.Fatalf("expected DirectionAbove on strong positive momentum, got %s", dir)
 	}
-}
 
-func TestCalculateTarget_MomentumLower_DirectionBelow(t *testing.T) {
-	dir, _ := calculateTarget(10000, 9000, 0.01)
+	dir = selectCAPPMDirection(10000, 8000, 300)
 	if dir != models.DirectionBelow {
-		t.Errorf("expected DirectionBelow when momentum < current, got %s", dir)
+		t.Fatalf("expected DirectionBelow on strong negative momentum, got %s", dir)
 	}
 }
 
-func TestCalculateTarget_EqualMomentum_DefaultsToAbove(t *testing.T) {
-	dir, _ := calculateTarget(10000, 10000, 0.01)
-	if dir != models.DirectionAbove {
-		t.Errorf("expected DirectionAbove when momentum == current, got %s", dir)
+func TestSelectCAPPMDirection_WeakMomentumFallsBackToBalancedSeed(t *testing.T) {
+	dir := selectCAPPMDirection(10000, 10010, 300)
+	if dir != models.DirectionBelow {
+		t.Fatalf("expected fallback direction Below for even/odd seed logic, got %s", dir)
 	}
 }
 
-func TestCalculateTarget_AboveOffset_IsVolatilityPercent(t *testing.T) {
-	// current = $1000.00 (100000 cents), vol = 1% → offset = 1000 → target = 101000
-	_, target := calculateTarget(100000, 200000, 0.01)
-	want := uint64(101000)
-	if target != want {
-		t.Errorf("above target = %d, want %d", target, want)
+// ── strike distance ──────────────────────────────────────────────────────────
+
+func TestCalculateCAPPMStrikeDistance_IsDurationAware(t *testing.T) {
+	short := calculateCAPPMStrikeDistance(100000, 300, 0.02)
+	long := calculateCAPPMStrikeDistance(100000, 21600, 0.02)
+
+	if long <= short {
+		t.Fatalf("expected longer duration distance to exceed short duration: short=%d long=%d", short, long)
 	}
 }
 
-func TestCalculateTarget_BelowOffset_IsVolatilityPercent(t *testing.T) {
-	// current = $1000.00 (100000 cents), vol = 1% → offset = 1000 → target = 99000
-	_, target := calculateTarget(100000, 50000, 0.01)
-	want := uint64(99000)
-	if target != want {
-		t.Errorf("below target = %d, want %d", target, want)
+func TestCalculateCAPPMStrikeDistance_ClampsToTradableBand(t *testing.T) {
+	current := uint64(100000)
+	distance := calculateCAPPMStrikeDistance(current, 300, 0.75)
+
+	maxBand := uint64(float64(current) * 0.75 * strikeDurationMultiplier(300) * cappmMaxYesZScore)
+	if distance > maxBand {
+		t.Fatalf("distance=%d exceeds tradable band max=%d", distance, maxBand)
+	}
+	if distance == 0 {
+		t.Fatal("distance should never be zero")
 	}
 }
 
-func TestCalculateTarget_ZeroOffset_ClampsToOne(t *testing.T) {
-	// current = 1 cent, vol = 0.01% → offset rounds to 0 → clamped to 1 → target = 2
-	_, target := calculateTarget(1, 100, 0.0001)
-	if target != 2 {
-		t.Errorf("zero-offset clamp: target = %d, want 2 (current + minimum offset 1)", target)
+// ── calculateTarget ──────────────────────────────────────────────────────────
+
+func TestCalculateTarget_UsesDurationAwareDistance(t *testing.T) {
+	_, shortTarget := calculateTarget(100000, 100000, 300, 0.02)
+	_, longTarget := calculateTarget(100000, 100000, 21600, 0.02)
+
+	shortDelta := absDiffU64(shortTarget, 100000)
+	longDelta := absDiffU64(longTarget, 100000)
+
+	if longDelta <= shortDelta {
+		t.Fatalf("expected longer duration target to sit farther from spot: short=%d long=%d", shortDelta, longDelta)
 	}
 }
 
-func TestCalculateTarget_BelowOffsetExceedsPrice_ClampsToOne(t *testing.T) {
-	// current = 5 cents, vol = 100% → offset = 5, 5 > 5 is false → target = 1
-	_, target := calculateTarget(5, 1, 1.0)
-	if target != 1 {
-		t.Errorf("below underflow should clamp to 1, got %d", target)
+func TestCalculateTarget_AboveAndBelowRemainSymmetricAroundSpot(t *testing.T) {
+	_, above := calculateTarget(100000, 120000, 300, 0.02)
+	_, below := calculateTarget(100000, 80000, 300, 0.02)
+
+	if above <= 100000 {
+		t.Fatalf("expected above target to sit above spot, got %d", above)
+	}
+	if below >= 100000 {
+		t.Fatalf("expected below target to sit below spot, got %d", below)
+	}
+}
+
+// ── duration labels ──────────────────────────────────────────────────────────
+
+func TestDurationLabelForSeconds_KnownDurations(t *testing.T) {
+	cases := map[uint64]string{
+		180:   "3min",
+		300:   "5min",
+		900:   "15min",
+		1800:  "30min",
+		3600:  "1hr",
+		21600: "6hr",
+		123:   "123s",
+	}
+
+	for seconds, want := range cases {
+		if got := durationLabelForSeconds(seconds); got != want {
+			t.Fatalf("duration label for %d = %q, want %q", seconds, got, want)
+		}
 	}
 }
 
 // ── buildMarketTitle ──────────────────────────────────────────────────────────
 
 func TestBuildMarketTitle_Above(t *testing.T) {
-	// $150.00 = 15000 cents
 	got := buildMarketTitle("SOL", models.DirectionAbove, 15000, "3min")
 	want := "Will SOL be above $150.00 in 3min?"
 	if got != want {
@@ -76,7 +109,6 @@ func TestBuildMarketTitle_Above(t *testing.T) {
 }
 
 func TestBuildMarketTitle_Below(t *testing.T) {
-	// $2500.99 = 250099 cents
 	got := buildMarketTitle("ETH", models.DirectionBelow, 250099, "1hr")
 	want := "Will ETH be below $2500.99 in 1hr?"
 	if got != want {
@@ -85,7 +117,6 @@ func TestBuildMarketTitle_Below(t *testing.T) {
 }
 
 func TestBuildMarketTitle_CentsFormatsTwoDigits(t *testing.T) {
-	// $100500.00 = 10050000 cents
 	got := buildMarketTitle("BTC", models.DirectionAbove, 10050000, "5min")
 	want := "Will BTC be above $100500.00 in 5min?"
 	if got != want {
@@ -120,4 +151,11 @@ func TestBuildMarketDescription_ContainsAssetAndDuration(t *testing.T) {
 	if !strings.Contains(desc, "30min") {
 		t.Errorf("description missing duration, got: %s", desc)
 	}
+}
+
+func absDiffU64(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }

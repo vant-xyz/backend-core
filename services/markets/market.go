@@ -184,9 +184,11 @@ func CreateCAPPMFromAdmin(ctx context.Context, input CreateCAPPMFromAdminInput) 
 		momentumCents = currentCents
 	}
 
-	direction, targetPrice := calculateTarget(currentCents, momentumCents, 0.01)
-	title := buildMarketTitle(input.Asset, direction, targetPrice, fmt.Sprintf("%ds", input.DurationSeconds))
-	description := buildMarketDescription(input.Asset, direction, targetPrice, fmt.Sprintf("%ds", input.DurationSeconds))
+	volatilityFactor := GetATRVolatilityFactor(input.Asset, input.DurationSeconds, 0.01)
+	direction, targetPrice := calculateTarget(currentCents, momentumCents, input.DurationSeconds, volatilityFactor)
+	durationLabel := durationLabelForSeconds(input.DurationSeconds)
+	title := buildMarketTitle(input.Asset, direction, targetPrice, durationLabel)
+	description := buildMarketDescription(input.Asset, direction, targetPrice, durationLabel)
 
 	return CreateCAPPM(ctx, CreateCAPPMInput{
 		Title:           title,
