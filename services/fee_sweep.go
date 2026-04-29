@@ -39,23 +39,61 @@ func sweepDepositFee(ctx context.Context, email, asset, network string, feeAmoun
 	if strings.Contains(network, "base") {
 		return sweepBaseFee(ctx, wallet.BasePrivateKey, asset, feeAmount)
 	}
-	return sweepSolanaFee(wallet.SolPrivateKey, asset, feeAmount)
+	return sweepSolanaFee(wallet.SolPrivateKey, asset, network, feeAmount)
 }
 
-func sweepSolanaFee(encPriv, asset string, feeAmount float64) error {
+func sweepSolanaFee(encPriv, asset, network string, feeAmount float64) error {
 	if feeAmount <= 0 {
-		return nil
-	}
-	if asset != "sol" && asset != "demo_sol" {
-		log.Printf("[FeeSweep] solana sweep skipped for non-native asset=%s", asset)
 		return nil
 	}
 	dec, err := Decrypt(encPriv)
 	if err != nil {
 		return err
 	}
-	_, err = TransferSol(dec, solFeeWalletPubKey(), feeAmount)
+	if asset == "sol" || asset == "demo_sol" {
+		_, err = TransferSol(dec, solFeeWalletPubKey(), feeAmount)
+		return err
+	}
+
+	mint, decimals, rpcURL := solanaFeeMintConfig(asset, network)
+	if mint == "" || rpcURL == "" {
+		log.Printf("[FeeSweep] solana sweep skipped unsupported/misconfigured asset=%s network=%s", asset, network)
+		return nil
+	}
+	_, err = TransferSPLToken(dec, solFeeWalletPubKey(), mint, decimals, feeAmount, rpcURL)
 	return err
+}
+
+func solanaFeeMintConfig(asset, network string) (mint string, decimals uint8, rpcURL string) {
+	decimals = 6
+	isDevnet := strings.Contains(network, "devnet") || strings.Contains(network, "testnet")
+
+	switch asset {
+	case "usdc_sol", "demo_usdc_sol":
+		if isDevnet {
+			return os.Getenv("DEVNET_SOL_USDC_MINT"), 6, os.Getenv("DEVNET_SOLANA_RPC_URL")
+		}
+		return os.Getenv("MAINNET_SOL_USDC_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "usdt_sol":
+		return os.Getenv("MAINNET_SOL_USDT_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "usdg_sol":
+		return os.Getenv("MAINNET_SOL_USDG_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "wsol_sol", "wsol":
+		if isDevnet {
+			m := os.Getenv("DEVNET_SOL_WSOL_MINT")
+			if m == "" {
+				m = defaultWSOLMint
+			}
+			return m, 9, os.Getenv("DEVNET_SOLANA_RPC_URL")
+		}
+		m := os.Getenv("MAINNET_SOL_WSOL_MINT")
+		if m == "" {
+			m = defaultWSOLMint
+		}
+		return m, 9, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	default:
+		return "", 0, ""
+	}
 }
 
 func sweepBaseFee(ctx context.Context, encPriv, asset string, feeAmount float64) error {

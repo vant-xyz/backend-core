@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
+	associatedtokenaccount "github.com/gagliardetto/solana-go/programs/associated-token-account"
 	computebudget "github.com/gagliardetto/solana-go/programs/compute-budget"
 	"github.com/gagliardetto/solana-go/programs/system"
+	"github.com/gagliardetto/solana-go/programs/token"
 	"github.com/gagliardetto/solana-go/rpc"
 	confirm "github.com/gagliardetto/solana-go/rpc/sendAndConfirmTransaction"
 	"github.com/gagliardetto/solana-go/rpc/ws"
@@ -268,6 +271,114 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
 	}
 
+	return sig.String(), nil
+}
+
+func TransferSPLToken(senderPrivateKey, recipientPublicKey, mintPublicKey string, decimals uint8, amount float64, rpcURL string) (string, error) {
+	if amount <= 0 {
+		return "", fmt.Errorf("amount must be positive")
+	}
+	if rpcURL == "" {
+		return "", fmt.Errorf("solana rpc url is required")
+	}
+	wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
+
+	client := rpc.New(rpcURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	wsClient, err := ws.Connect(ctx, wsURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to websocket: %w", err)
+	}
+	defer wsClient.Close()
+
+	senderWallet, err := solana.WalletFromPrivateKeyBase58(senderPrivateKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create sender wallet from private key: %w", err)
+	}
+	feePayerSecret := os.Getenv("VANT_FEE_PAYER_SOLANA")
+	feePayerWallet, err := solana.WalletFromPrivateKeyBase58(feePayerSecret)
+	if err != nil {
+		return "", fmt.Errorf("failed to create fee payer wallet: %w", err)
+	}
+	dest, err := solana.PublicKeyFromBase58(recipientPublicKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid recipient pubkey %s: %w", recipientPublicKey, err)
+	}
+	mint, err := solana.PublicKeyFromBase58(mintPublicKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid mint pubkey %s: %w", mintPublicKey, err)
+	}
+
+	senderATA, _, err := solana.FindAssociatedTokenAddress(senderWallet.PublicKey(), mint)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive sender ATA: %w", err)
+	}
+	destATA, _, err := solana.FindAssociatedTokenAddress(dest, mint)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive destination ATA: %w", err)
+	}
+
+	instructions := []solana.Instruction{
+		computebudget.NewSetComputeUnitPriceInstruction(100000).Build(),
+	}
+
+	// Ensure destination ATA exists.
+	{
+		checkCtx, checkCancel := context.WithTimeout(context.Background(), rpcTimeout)
+		defer checkCancel()
+		_, err = client.GetAccountInfo(checkCtx, destATA)
+		if err != nil {
+			instructions = append(instructions, associatedtokenaccount.NewCreateInstruction(
+				feePayerWallet.PublicKey(),
+				dest,
+				mint,
+			).Build())
+		}
+	}
+
+	baseUnits := uint64(math.Round(amount * math.Pow10(int(decimals))))
+	instructions = append(instructions, token.NewTransferCheckedInstruction(
+		baseUnits,
+		decimals,
+		senderATA,
+		mint,
+		destATA,
+		senderWallet.PublicKey(),
+		nil,
+	).Build())
+
+	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		return "", fmt.Errorf("GetLatestBlockhash failed: %w", err)
+	}
+	tx, err := solana.NewTransaction(
+		instructions,
+		recent.Value.Blockhash,
+		solana.TransactionPayer(feePayerWallet.PublicKey()),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to build transaction: %w", err)
+	}
+
+	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+		if key.Equals(senderWallet.PublicKey()) {
+			return &senderWallet.PrivateKey
+		}
+		if key.Equals(feePayerWallet.PublicKey()) {
+			return &feePayerWallet.PrivateKey
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to sign transaction: %w", err)
+	}
+
+	sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
+	if err != nil {
+		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
+	}
 	return sig.String(), nil
 }
 
