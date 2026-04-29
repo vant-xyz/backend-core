@@ -14,6 +14,8 @@ const (
 	minDepthPerSideQty     = 300.0
 	replenishThresholdQty  = 150.0
 	spreadBlowoutThreshold = 0.25
+	isMainnet              = false
+	devBotPairsPerCycle    = 6
 )
 
 var botEmails = []string{
@@ -30,6 +32,10 @@ var botEmails = []string{
 }
 
 func StartLiquidityProvider(market *models.Market) {
+	if isMainnet {
+		log.Printf("[Liquidity] Disabled on mainnet for %s", market.ID)
+		return
+	}
 	if market.MarketType != models.MarketTypeCAPPM {
 		return
 	}
@@ -61,7 +67,7 @@ func runLiquidityLifecycle(market *models.Market) {
 }
 
 func seedInitialLiquidity(ctx context.Context, market *models.Market) {
-	levels := 5
+	levels := 10
 	basePrice := 0.49
 
 	for i := 0; i < levels; i++ {
@@ -78,7 +84,7 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 		qty := 50.0 + rand.Float64()*150.0
 		qty = math.Round(qty)
 
-		PlaceOrder(ctx, PlaceOrderInput{
+		if _, err := PlaceOrder(ctx, PlaceOrderInput{
 			UserEmail: botEmails[i*2],
 			MarketID:  market.ID,
 			Side:      models.OrderSideYes,
@@ -86,8 +92,10 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 			Price:     price,
 			Quantity:  qty,
 			IsDemo:    true,
-		})
-		PlaceOrder(ctx, PlaceOrderInput{
+		}); err != nil {
+			log.Printf("[Liquidity] seed skip bot=%s side=YES market=%s: %v", botEmails[i*2], market.ID, err)
+		}
+		if _, err := PlaceOrder(ctx, PlaceOrderInput{
 			UserEmail: botEmails[i*2+1],
 			MarketID:  market.ID,
 			Side:      models.OrderSideNo,
@@ -95,7 +103,9 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 			Price:     price,
 			Quantity:  qty,
 			IsDemo:    true,
-		})
+		}); err != nil {
+			log.Printf("[Liquidity] seed skip bot=%s side=NO market=%s: %v", botEmails[i*2+1], market.ID, err)
+		}
 	}
 	log.Printf("[Liquidity] Initial seeding complete for %s", market.ID)
 }
@@ -140,37 +150,59 @@ func updateLiquidity(ctx context.Context, market *models.Market) {
 
 	cleanupBotOrders(ctx, market.ID)
 
-	qty := 100.0 + rand.Float64()*400.0
-	qty = math.Round(qty)
+	perm := rand.Perm(len(botEmails))
+	pairs := devBotPairsPerCycle
+	maxPairs := len(botEmails) / 2
+	if pairs > maxPairs {
+		pairs = maxPairs
+	}
+	for i := 0; i < pairs; i++ {
+		yesBot := botEmails[perm[i*2]]
+		noBot := botEmails[perm[i*2+1]]
+		qty := 80.0 + rand.Float64()*320.0
+		qty = math.Round(qty)
+		yesPrice := yesBid - (float64(i) * 0.01)
+		noPrice := noBid - (float64(i) * 0.01)
+		if yesPrice < 0.01 {
+			yesPrice = 0.01
+		}
+		if noPrice < 0.01 {
+			noPrice = 0.01
+		}
 
-	PlaceOrder(ctx, PlaceOrderInput{
-		UserEmail: botEmails[0],
-		MarketID:  market.ID,
-		Side:      models.OrderSideYes,
-		Type:      models.OrderTypeLimit,
-		Price:     yesBid,
-		Quantity:  qty,
-		IsDemo:    true,
-	})
+		if _, err := PlaceOrder(ctx, PlaceOrderInput{
+			UserEmail: yesBot,
+			MarketID:  market.ID,
+			Side:      models.OrderSideYes,
+			Type:      models.OrderTypeLimit,
+			Price:     yesPrice,
+			Quantity:  qty,
+			IsDemo:    true,
+		}); err != nil {
+			log.Printf("[Liquidity] update skip bot=%s side=YES market=%s: %v", yesBot, market.ID, err)
+		}
 
-	PlaceOrder(ctx, PlaceOrderInput{
-		UserEmail: botEmails[1],
-		MarketID:  market.ID,
-		Side:      models.OrderSideNo,
-		Type:      models.OrderTypeLimit,
-		Price:     noBid,
-		Quantity:  qty,
-		IsDemo:    true,
-	})
+		if _, err := PlaceOrder(ctx, PlaceOrderInput{
+			UserEmail: noBot,
+			MarketID:  market.ID,
+			Side:      models.OrderSideNo,
+			Type:      models.OrderTypeLimit,
+			Price:     noPrice,
+			Quantity:  qty,
+			IsDemo:    true,
+		}); err != nil {
+			log.Printf("[Liquidity] update skip bot=%s side=NO market=%s: %v", noBot, market.ID, err)
+		}
+	}
 
 	applyDepthGuardrails(ctx, market.ID)
 	alertOnSpreadBlowout(market.ID)
-	log.Printf("[Liquidity] Updated for %s: prob=%.4f (jitter=%.4f) yesBid=%.2f noBid=%.2f qty=%.0f",
-		market.ID, prob, jitter, yesBid, noBid, qty)
+	log.Printf("[Liquidity] Updated for %s: prob=%.4f (jitter=%.4f) yesBid=%.2f noBid=%.2f pairs=%d",
+		market.ID, prob, jitter, yesBid, noBid, pairs)
 }
 
 func cleanupBotOrders(ctx context.Context, marketID string) {
-	for _, email := range botEmails[:2] {
+	for _, email := range botEmails {
 		orders, err := GetUserOrders(ctx, email, marketID)
 		if err != nil {
 			continue
@@ -206,10 +238,7 @@ func applyDepthGuardrails(ctx context.Context, marketID string) {
 func replenishSide(ctx context.Context, marketID string, side models.OrderSide) {
 	price := 0.49
 	qty := 150.0 + rand.Float64()*200.0
-	email := botEmails[0]
-	if side == models.OrderSideNo {
-		email = botEmails[1]
-	}
+	email := botEmails[rand.IntN(len(botEmails))]
 	if _, err := PlaceOrder(ctx, PlaceOrderInput{
 		UserEmail: email,
 		MarketID:  marketID,
