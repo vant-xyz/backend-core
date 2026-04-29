@@ -41,6 +41,7 @@ type SendTransactionEmailRequest struct {
 	FeeAmount float64 `json:"feeAmount,omitempty"`
 	FeeRate   float64 `json:"feeRate,omitempty"`
 	FeeChain  string  `json:"feeChain,omitempty"`
+	FeeWallet string  `json:"feeWallet,omitempty"`
 	NetAmount float64 `json:"netAmount,omitempty"`
 	Currency  string  `json:"currency"`
 	Nature    string  `json:"nature"`
@@ -113,7 +114,8 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 		FeeAmount: tx.FeeAmount,
 		FeeRate:   tx.FeeRate,
 		FeeChain:  tx.FeeChain,
-		NetAmount: tx.Amount - tx.FeeAmount,
+		FeeWallet: tx.FeeWallet,
+		NetAmount: tx.Amount,
 		Currency:  tx.Currency,
 		Nature:    tx.Nature,
 		Status:    tx.Status,
