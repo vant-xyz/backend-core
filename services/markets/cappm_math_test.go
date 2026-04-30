@@ -10,14 +10,16 @@ import (
 // ── direction selection ──────────────────────────────────────────────────────
 
 func TestSelectCAPPMDirection_StrongMomentumDrivesDirection(t *testing.T) {
+	// current=10000, momentum=12000: price fell from 12000 → 10000, trend is down → Below
 	dir := selectCAPPMDirection(10000, 12000, 300)
-	if dir != models.DirectionAbove {
-		t.Fatalf("expected DirectionAbove on strong positive momentum, got %s", dir)
+	if dir != models.DirectionBelow {
+		t.Fatalf("expected DirectionBelow when price trended down (past 12000 > current 10000), got %s", dir)
 	}
 
+	// current=10000, momentum=8000: price rose from 8000 → 10000, trend is up → Above
 	dir = selectCAPPMDirection(10000, 8000, 300)
-	if dir != models.DirectionBelow {
-		t.Fatalf("expected DirectionBelow on strong negative momentum, got %s", dir)
+	if dir != models.DirectionAbove {
+		t.Fatalf("expected DirectionAbove when price trended up (past 8000 < current 10000), got %s", dir)
 	}
 }
 
@@ -67,14 +69,16 @@ func TestCalculateTarget_UsesDurationAwareDistance(t *testing.T) {
 }
 
 func TestCalculateTarget_AboveAndBelowRemainSymmetricAroundSpot(t *testing.T) {
-	_, above := calculateTarget(100000, 120000, 300, 0.02)
-	_, below := calculateTarget(100000, 80000, 300, 0.02)
+	// past=120000, current=100000: price fell → DirectionBelow → target below spot
+	_, belowTarget := calculateTarget(100000, 120000, 300, 0.02)
+	// past=80000, current=100000: price rose → DirectionAbove → target above spot
+	_, aboveTarget := calculateTarget(100000, 80000, 300, 0.02)
 
-	if above <= 100000 {
-		t.Fatalf("expected above target to sit above spot, got %d", above)
+	if aboveTarget <= 100000 {
+		t.Fatalf("expected above target to sit above spot, got %d", aboveTarget)
 	}
-	if below >= 100000 {
-		t.Fatalf("expected below target to sit below spot, got %d", below)
+	if belowTarget >= 100000 {
+		t.Fatalf("expected below target to sit below spot, got %d", belowTarget)
 	}
 }
 
