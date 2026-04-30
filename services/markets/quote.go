@@ -135,7 +135,7 @@ func AcceptExecutableQuote(ctx context.Context, input AcceptQuoteInput) (*models
 		if redisErr := db.RedisUpdateOrderFill(ctx, order.ID, order.FilledQty, order.RemainingQty, order.Status); redisErr != nil {
 			log.Printf("[Quotes] Failed to cancel rejected quote order %s in redis: %v", order.ID, redisErr)
 		}
-		db.AsyncSyncFillToPG(order.ID, order.FilledQty, order.RemainingQty, order.Status)
+		db.AsyncSyncFillToPG(order)
 		return nil, nil, err
 	}
 	globalRiskState.release(input.MarketID, acceptedReservation.Side, acceptedReservation.TotalCost, acceptedReservation.EstimatedShares)

@@ -47,6 +47,27 @@ func GetOrderByID(ctx context.Context, orderID string) (*models.Order, error) {
 	return o, nil
 }
 
+func UpsertOrderFill(ctx context.Context, o *models.Order) error {
+	_, err := Pool.Exec(ctx, `
+		INSERT INTO orders (
+			id, user_email, market_id, side, type, price, quantity,
+			filled_qty, remaining_qty, status, quote_currency, is_demo,
+			created_at, updated_at, expires_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),$14)
+		ON CONFLICT (id) DO UPDATE SET
+			filled_qty = EXCLUDED.filled_qty,
+			remaining_qty = EXCLUDED.remaining_qty,
+			status = EXCLUDED.status,
+			updated_at = NOW()
+		WHERE orders.status NOT IN ('FILLED', 'CANCELLED')
+	`,
+		o.ID, o.UserEmail, o.MarketID, string(o.Side), string(o.Type),
+		o.Price, o.Quantity, o.FilledQty, o.RemainingQty, string(o.Status),
+		o.QuoteCurrency, o.IsDemo, o.CreatedAt, o.ExpiresAt,
+	)
+	return err
+}
+
 func UpdateOrderFill(ctx context.Context, orderID string, filledQty, remainingQty float64, status models.OrderStatus) error {
 	tag, err := Pool.Exec(ctx, `
 		UPDATE orders

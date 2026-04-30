@@ -407,6 +407,8 @@ func (b *marketBook) executeFill(taker, maker *models.Order, qty, price float64)
 }
 
 func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
+	takerPrice := taker.Price
+	makerPrice := maker.Price
 	taker.FilledQty += qty
 	taker.RemainingQty -= qty
 	maker.FilledQty += qty
@@ -421,10 +423,10 @@ func (b *marketBook) executeCrossFill(taker, maker *models.Order, qty float64) {
 	} else {
 		maker.Status = models.OrderStatusPartiallyFilled
 	}
-	b.lastTradedPrice = taker.Price
+	b.lastTradedPrice = takerPrice
 	log.Printf("[Engine] CrossFill: market=%s taker=%s(%s@%.2f) maker=%s(%s@%.2f) qty=%.2f",
-		b.marketID, taker.ID, taker.Side, taker.Price, maker.ID, maker.Side, maker.Price, qty)
-	go persistCrossFillAsync(taker, maker, qty, b.marketID)
+		b.marketID, taker.ID, taker.Side, takerPrice, maker.ID, maker.Side, makerPrice, qty)
+	go persistCrossFillAsync(taker, maker, qty, takerPrice, makerPrice, b.marketID)
 }
 
 func (b *marketBook) addToBook(order *models.Order) {
@@ -795,8 +797,12 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 	}); err != nil {
 		log.Printf("[Engine] Redis fill batch update failed: %v", err)
 	}
-	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
-	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
+	takerSnap := *taker
+	takerSnap.Status = takerStatus
+	db.AsyncSyncFillToPG(&takerSnap)
+	makerSnap := *maker
+	makerSnap.Status = makerStatus
+	db.AsyncSyncFillToPG(&makerSnap)
 
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*price); err != nil {
 		log.Printf("[Engine] Failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
@@ -836,7 +842,7 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 	})
 }
 
-func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID string) {
+func persistCrossFillAsync(taker, maker *models.Order, qty, takerPrice, makerPrice float64, marketID string) {
 	if !persistenceReady() {
 		return
 	}
@@ -864,15 +870,21 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 	}); err != nil {
 		log.Printf("[Engine] CrossFill: Redis fill batch update failed: %v", err)
 	}
-	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
-	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
+	takerSnap := *taker
+	takerSnap.Status = takerStatus
+	takerSnap.Price = takerPrice
+	db.AsyncSyncFillToPG(&takerSnap)
+	makerSnap := *maker
+	makerSnap.Status = makerStatus
+	makerSnap.Price = makerPrice
+	db.AsyncSyncFillToPG(&makerSnap)
 
 	log.Printf("[Engine] CrossFill[%s]: deducting — taker=%s amount=%.4f maker=%s amount=%.4f",
-		fillID, taker.UserEmail, qty*taker.Price, maker.UserEmail, qty*maker.Price)
-	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*taker.Price); err != nil {
+		fillID, taker.UserEmail, qty*takerPrice, maker.UserEmail, qty*makerPrice)
+	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*takerPrice); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for taker %s: %v", fillID, taker.UserEmail, err)
 	}
-	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*maker.Price); err != nil {
+	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*makerPrice); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for maker %s: %v", fillID, maker.UserEmail, err)
 	}
 
@@ -881,7 +893,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		MarketID:      marketID,
 		Side:          taker.Side,
 		Shares:        qty,
-		FillPrice:     taker.Price,
+		FillPrice:     takerPrice,
 		QuoteCurrency: market.QuoteCurrency,
 		IsDemo:        taker.IsDemo,
 	}); err != nil {
@@ -893,7 +905,7 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 		MarketID:      marketID,
 		Side:          maker.Side,
 		Shares:        qty,
-		FillPrice:     maker.Price,
+		FillPrice:     makerPrice,
 		QuoteCurrency: market.QuoteCurrency,
 		IsDemo:        maker.IsDemo,
 	}); err != nil {
@@ -901,8 +913,8 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 	}
 
 	BroadcastOrderbookUpdate(marketID, "FILL", map[string]interface{}{
-		"taker_price": taker.Price,
-		"maker_price": maker.Price,
+		"taker_price": takerPrice,
+		"maker_price": makerPrice,
 		"qty":         qty,
 		"taker_side":  taker.Side,
 	})
@@ -917,7 +929,7 @@ func persistOrderFill(order *models.Order) {
 	if err := db.RedisUpdateOrderFill(ctx, order.ID, order.FilledQty, order.RemainingQty, order.Status); err != nil {
 		log.Printf("[Engine] Redis order fill update failed %s: %v", order.ID, err)
 	}
-	db.AsyncSyncFillToPG(order.ID, order.FilledQty, order.RemainingQty, order.Status)
+	db.AsyncSyncFillToPG(order)
 }
 
 func cancelOrderAsync(orderID, userEmail string) {
