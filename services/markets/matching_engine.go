@@ -70,6 +70,7 @@ const (
 	cmdAcceptQuote
 	cmdReleaseQuote
 	cmdGetQuote
+	cmdGetUserOrders
 )
 
 type engineCommand struct {
@@ -240,6 +241,17 @@ func (e *MatchingEngine) GetQuote(marketID, quoteID string) (*quoteReservation, 
 	return resp.reservation, resp.err
 }
 
+func (e *MatchingEngine) GetUserOrders(marketID, userEmail string) []*models.Order {
+	book := e.getOrCreateBook(marketID)
+	respCh := make(chan interface{}, 1)
+	book.inbound <- engineCommand{typ: cmdGetUserOrders, userEmail: userEmail, respCh: respCh}
+	resp := <-respCh
+	if orders, ok := resp.([]*models.Order); ok {
+		return orders
+	}
+	return nil
+}
+
 func (e *MatchingEngine) CloseMarket(marketID string) {
 	e.mu.Lock()
 	book, ok := e.books[marketID]
@@ -284,6 +296,8 @@ func (b *marketBook) handle(cmd engineCommand) {
 	case cmdGetQuote:
 		reservation, err := b.getQuote(cmd.quoteID)
 		cmd.respCh <- getQuoteResult{reservation: reservation, err: err}
+	case cmdGetUserOrders:
+		cmd.respCh <- b.getUserOrders(cmd.userEmail)
 	}
 }
 
@@ -722,6 +736,21 @@ func (b *marketBook) acceptQuote(quoteID string, order *models.Order) (*quoteRes
 	return reservation, nil
 }
 
+func (b *marketBook) getUserOrders(userEmail string) []*models.Order {
+	var orders []*models.Order
+	for _, e := range b.yesBids {
+		if e.order.UserEmail == userEmail {
+			orders = append(orders, e.order)
+		}
+	}
+	for _, e := range b.noBids {
+		if e.order.UserEmail == userEmail {
+			orders = append(orders, e.order)
+		}
+	}
+	return orders
+}
+
 func (b *marketBook) getQuote(quoteID string) (*quoteReservation, error) {
 	reservation, ok := b.reservations[quoteID]
 	if !ok {
@@ -756,18 +785,17 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 	if taker.RemainingQty == 0 {
 		takerStatus = models.OrderStatusFilled
 	}
-	if err := db.RedisUpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
-		log.Printf("[Engine] Redis fill update failed for taker %s: %v", taker.ID, err)
-	}
-	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
-
 	makerStatus := models.OrderStatusPartiallyFilled
 	if maker.RemainingQty == 0 {
 		makerStatus = models.OrderStatusFilled
 	}
-	if err := db.RedisUpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
-		log.Printf("[Engine] Redis fill update failed for maker %s: %v", maker.ID, err)
+	if err := db.RedisBatchUpdateFills(ctx, []db.OrderFillUpdate{
+		{ID: taker.ID, FilledQty: taker.FilledQty, RemainingQty: taker.RemainingQty, Status: takerStatus},
+		{ID: maker.ID, FilledQty: maker.FilledQty, RemainingQty: maker.RemainingQty, Status: makerStatus},
+	}); err != nil {
+		log.Printf("[Engine] Redis fill batch update failed: %v", err)
 	}
+	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
 	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
 
 	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*price); err != nil {
@@ -826,18 +854,17 @@ func persistCrossFillAsync(taker, maker *models.Order, qty float64, marketID str
 	if taker.RemainingQty == 0 {
 		takerStatus = models.OrderStatusFilled
 	}
-	if err := db.RedisUpdateOrderFill(ctx, taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus); err != nil {
-		log.Printf("[Engine] CrossFill: Redis fill update failed for taker %s: %v", taker.ID, err)
-	}
-	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
-
 	makerStatus := models.OrderStatusPartiallyFilled
 	if maker.RemainingQty == 0 {
 		makerStatus = models.OrderStatusFilled
 	}
-	if err := db.RedisUpdateOrderFill(ctx, maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus); err != nil {
-		log.Printf("[Engine] CrossFill: Redis fill update failed for maker %s: %v", maker.ID, err)
+	if err := db.RedisBatchUpdateFills(ctx, []db.OrderFillUpdate{
+		{ID: taker.ID, FilledQty: taker.FilledQty, RemainingQty: taker.RemainingQty, Status: takerStatus},
+		{ID: maker.ID, FilledQty: maker.FilledQty, RemainingQty: maker.RemainingQty, Status: makerStatus},
+	}); err != nil {
+		log.Printf("[Engine] CrossFill: Redis fill batch update failed: %v", err)
 	}
+	db.AsyncSyncFillToPG(taker.ID, taker.FilledQty, taker.RemainingQty, takerStatus)
 	db.AsyncSyncFillToPG(maker.ID, maker.FilledQty, maker.RemainingQty, makerStatus)
 
 	log.Printf("[Engine] CrossFill[%s]: deducting — taker=%s amount=%.4f maker=%s amount=%.4f",

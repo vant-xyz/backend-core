@@ -109,6 +109,41 @@ func TestLiquidityProvider_ProbabilityMath(t *testing.T) {
 	}
 }
 
+func TestFairValueProb_AboveCurrentAboveTarget(t *testing.T) {
+	prob := fairValueProb(110000, 100000, models.DirectionAbove, 0.01, 1.0)
+	assert.Greater(t, prob, 0.7, "expected high YES probability when price well above target")
+}
+
+func TestFairValueProb_BelowCurrentAboveTarget(t *testing.T) {
+	prob := fairValueProb(90000, 100000, models.DirectionAbove, 0.01, 1.0)
+	assert.Less(t, prob, 0.3, "expected low YES probability when price well below target")
+}
+
+func TestFairValueProb_DirectionBelowInverts(t *testing.T) {
+	above := fairValueProb(110000, 100000, models.DirectionAbove, 0.01, 1.0)
+	below := fairValueProb(110000, 100000, models.DirectionBelow, 0.01, 1.0)
+	sum := above + below
+	assert.InDelta(t, 1.0, sum, 0.001, "Above + Below for same inputs should sum to 1.0")
+}
+
+func TestFairValueProb_AtTargetNearHalf(t *testing.T) {
+	prob := fairValueProb(100000, 100000, models.DirectionAbove, 0.01, 1.0)
+	assert.InDelta(t, 0.5, prob, 0.05, "expected ~0.5 when current == target")
+}
+
+func TestFairValueProb_LateMarketMoreExtreme(t *testing.T) {
+	early := fairValueProb(101000, 100000, models.DirectionAbove, 0.05, 1.0)
+	late := fairValueProb(101000, 100000, models.DirectionAbove, 0.05, 0.1)
+	assert.Greater(t, late, early, "late-market probability should be more extreme than early-market")
+}
+
+func TestFairValueProb_ClampedToRange(t *testing.T) {
+	low := fairValueProb(10000, 100000, models.DirectionAbove, 0.0001, 1.0)
+	high := fairValueProb(1000000, 100000, models.DirectionAbove, 0.0001, 1.0)
+	assert.GreaterOrEqual(t, low, 0.03)
+	assert.LessOrEqual(t, high, 0.97)
+}
+
 func TestMatchingEngine_Rehydration(t *testing.T) {
 	marketID := "MKT_REHYDRATE"
 	email1 := "test1@vant.xyz"

@@ -18,6 +18,8 @@ const (
 	devBotPairsPerCycle    = 6
 )
 
+var takerBotPool []string
+
 var botEmails = []string{
 	"carsonpine@hotmail.com", "quaddavid4@hotmail.com", "vant.charlie@testmail.com",
 	"vant.diana@testmail.com", "vant.eve@testmail.com", "vant.frank@testmail.com",
@@ -29,6 +31,10 @@ var botEmails = []string{
 	"vant.wendy@testmail.com", "vant.xander@testmail.com", "vant.yara@testmail.com",
 	"vant.zack@testmail.com", "vant.amber@testmail.com", "vant.blake@testmail.com",
 	"vant.cora@testmail.com", "vant.derek@testmail.com", "vant.elena@testmail.com",
+}
+
+func init() {
+	takerBotPool = botEmails
 }
 
 func StartLiquidityProvider(market *models.Market) {
@@ -46,6 +52,8 @@ func runLiquidityLifecycle(market *models.Market) {
 	log.Printf("[Liquidity] Starting lifecycle for %s", market.ID)
 	ctx := context.Background()
 	seedInitialLiquidity(ctx, market)
+
+	go runIntelligentTradingLoop(market)
 
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
@@ -108,25 +116,14 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 		}
 	}
 	log.Printf("[Liquidity] Initial seeding complete for %s", market.ID)
+	seedInitialTrades(ctx, market)
 }
 
 func updateLiquidity(ctx context.Context, market *models.Market) {
-	currentPriceCents, err := GetCurrentPrice(market.Asset)
+	prob, err := computeFairValue(market)
 	if err != nil {
 		return
 	}
-
-	target := float64(market.TargetPrice)
-	current := float64(currentPriceCents)
-
-	volatility := GetATRVolatilityFactor(market.Asset, market.DurationSeconds, 0.005)
-
-	z := (current - target) / (target * volatility)
-	if market.Direction == models.DirectionBelow {
-		z = -z
-	}
-
-	prob := 0.5 * (1 + math.Erf(z/math.Sqrt(2)))
 
 	jitter := (rand.Float64() * 0.04) - 0.02
 	prob += jitter
@@ -201,16 +198,135 @@ func updateLiquidity(ctx context.Context, market *models.Market) {
 		market.ID, prob, jitter, yesBid, noBid, pairs)
 }
 
-func cleanupBotOrders(ctx context.Context, marketID string) {
-	for _, email := range botEmails {
-		orders, err := GetUserOrders(ctx, email, marketID)
-		if err != nil {
-			continue
+func fairValueProb(currentCents, targetCents uint64, direction models.MarketDirection, volatility, timeFraction float64) float64 {
+	if timeFraction <= 0 {
+		timeFraction = 0.001
+	} else if timeFraction > 1 {
+		timeFraction = 1
+	}
+	adjustedVol := volatility * math.Sqrt(timeFraction)
+	if adjustedVol < 0.0001 {
+		adjustedVol = 0.0001
+	}
+	z := (float64(currentCents) - float64(targetCents)) / (float64(targetCents) * adjustedVol)
+	if direction == models.DirectionBelow {
+		z = -z
+	}
+	prob := 0.5 * (1 + math.Erf(z/math.Sqrt2))
+	if prob < 0.03 {
+		return 0.03
+	} else if prob > 0.97 {
+		return 0.97
+	}
+	return prob
+}
+
+func computeFairValue(market *models.Market) (float64, error) {
+	currentCents, err := GetCurrentPrice(market.Asset)
+	if err != nil {
+		return 0.5, err
+	}
+	volatility := GetATRVolatilityFactor(market.Asset, market.DurationSeconds, 0.005)
+	timeFraction := time.Until(market.EndTimeUTC).Seconds() / float64(market.DurationSeconds)
+	return fairValueProb(currentCents, market.TargetPrice, market.Direction, volatility, timeFraction), nil
+}
+
+func seedInitialTrades(ctx context.Context, market *models.Market) {
+	count := int(math.Round(float64(len(botEmails)) * 0.7))
+	perm := rand.Perm(len(botEmails))
+	for i := 0; i < count; i++ {
+		bot := botEmails[perm[i]]
+		side := models.OrderSideYes
+		if i%2 != 0 {
+			side = models.OrderSideNo
 		}
-		for _, o := range orders {
-			if o.Status == models.OrderStatusOpen || o.Status == models.OrderStatusPartiallyFilled {
-				CancelOrder(ctx, o.ID, email)
+		qty := math.Round(10 + rand.Float64()*40)
+		if _, err := PlaceOrder(ctx, PlaceOrderInput{
+			UserEmail: bot,
+			MarketID:  market.ID,
+			Side:      side,
+			Type:      models.OrderTypeMarket,
+			Quantity:  qty,
+			IsDemo:    true,
+		}); err != nil {
+			log.Printf("[Liquidity] seed trade skip bot=%s side=%s market=%s: %v", bot, side, market.ID, err)
+		}
+	}
+}
+
+func runIntelligentTradingLoop(market *models.Market) {
+	ticker := time.NewTicker(30*time.Second + time.Duration(rand.IntN(15))*time.Second)
+	defer ticker.Stop()
+	deadline := time.NewTimer(time.Until(market.EndTimeUTC))
+	defer deadline.Stop()
+	ctx := context.Background()
+	for {
+		select {
+		case <-ticker.C:
+			m, err := GetMarketByID(ctx, market.ID)
+			if err != nil || m.Status != models.MarketStatusActive {
+				return
 			}
+			intelligentTrade(ctx, m)
+		case <-deadline.C:
+			return
+		}
+	}
+}
+
+func intelligentTrade(ctx context.Context, market *models.Market) {
+	fairValue, err := computeFairValue(market)
+	if err != nil {
+		return
+	}
+
+	engine := GetMatchingEngine()
+	implied := engine.GetLastTradedPrice(market.ID)
+	if implied == 0 {
+		yesBids := engine.GetDepth(market.ID, models.OrderSideYes, "bids")
+		noBids := engine.GetDepth(market.ID, models.OrderSideNo, "bids")
+		if len(yesBids) == 0 || len(noBids) == 0 {
+			return
+		}
+		implied = (yesBids[0].Price + (1 - noBids[0].Price)) / 2
+	}
+
+	deviation := fairValue - implied
+	if math.Abs(deviation) < 0.05 {
+		return
+	}
+
+	side := models.OrderSideYes
+	if deviation < 0 {
+		side = models.OrderSideNo
+	}
+
+	qty := math.Round(10 + (math.Abs(deviation)/0.5)*70)
+	if qty > 80 {
+		qty = 80
+	}
+
+	bot := takerBotPool[rand.IntN(len(takerBotPool))]
+	if _, err := PlaceOrder(ctx, PlaceOrderInput{
+		UserEmail: bot,
+		MarketID:  market.ID,
+		Side:      side,
+		Type:      models.OrderTypeMarket,
+		Quantity:  qty,
+		IsDemo:    true,
+	}); err != nil {
+		log.Printf("[IntelligentBot] skip bot=%s side=%s market=%s: %v", bot, side, market.ID, err)
+		return
+	}
+	log.Printf("[IntelligentBot] market=%s fair=%.4f implied=%.4f dev=%.4f side=%s qty=%.0f",
+		market.ID, fairValue, implied, deviation, side, qty)
+}
+
+func cleanupBotOrders(ctx context.Context, marketID string) {
+	engine := GetMatchingEngine()
+	for _, email := range botEmails {
+		for _, o := range engine.GetUserOrders(marketID, email) {
+			CancelOrder(ctx, o.ID, email)
 		}
 	}
 }

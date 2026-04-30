@@ -87,6 +87,53 @@ func RedisUpdateOrderFill(ctx context.Context, id string, filledQty, remainingQt
 	return RDB.Set(ctx, orderKey(id), updated, orderTTL).Err()
 }
 
+type OrderFillUpdate struct {
+	ID           string
+	FilledQty    float64
+	RemainingQty float64
+	Status       models.OrderStatus
+}
+
+func RedisBatchUpdateFills(ctx context.Context, updates []OrderFillUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	keys := make([]string, len(updates))
+	for i, u := range updates {
+		keys[i] = orderKey(u.ID)
+	}
+	results, err := RDB.MGet(ctx, keys...).Result()
+	if err != nil {
+		return fmt.Errorf("mget fills: %w", err)
+	}
+	pipe := RDB.Pipeline()
+	now := time.Now()
+	for i, u := range updates {
+		if results[i] == nil {
+			continue
+		}
+		raw, ok := results[i].(string)
+		if !ok {
+			continue
+		}
+		var o models.Order
+		if err := json.Unmarshal([]byte(raw), &o); err != nil {
+			continue
+		}
+		o.FilledQty = u.FilledQty
+		o.RemainingQty = u.RemainingQty
+		o.Status = u.Status
+		o.UpdatedAt = now
+		data, err := json.Marshal(o)
+		if err != nil {
+			continue
+		}
+		pipe.Set(ctx, keys[i], data, orderTTL)
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
 func AsyncSyncOrderToPG(o *models.Order, pgFn func(context.Context, *models.Order) error) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
