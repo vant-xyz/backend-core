@@ -24,16 +24,18 @@ type CreateCAPPMInput struct {
 	StartTimeUTC    time.Time
 	DurationSeconds uint64
 	AssetImage      string
+	Category        string
 }
 
 type CreateGEMInput struct {
-	Title              string
-	Description        string
-	DataProvider       string
-	StartTimeUTC       time.Time
-	DurationSeconds    uint64
-	MarketImageSmall   string
-	MarketImageBanner  string
+	Title             string
+	Description       string
+	DataProvider      string
+	StartTimeUTC      time.Time
+	DurationSeconds   uint64
+	MarketImageSmall  string
+	MarketImageBanner string
+	Category          string
 }
 
 type CreateCAPPMFromAdminInput struct {
@@ -106,6 +108,7 @@ func CreateCAPPM(ctx context.Context, input CreateCAPPMInput) (*models.Market, e
 		TargetPrice:     input.TargetPrice,
 		CurrentPrice:    input.CurrentPrice,
 		AssetImage:      input.AssetImage,
+		Category:        "crypto",
 	}
 
 	if err := db.SaveMarket(ctx, market); err != nil {
@@ -146,6 +149,11 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 	now := time.Now()
 	endTime := input.StartTimeUTC.Add(time.Duration(input.DurationSeconds) * time.Second)
 
+	category := input.Category
+	if category == "" {
+		category = "general"
+	}
+
 	market := &models.Market{
 		ID:                marketID,
 		MarketType:        models.MarketTypeGEM,
@@ -163,6 +171,7 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 		CreationTxHash:    txHash,
 		MarketImageSmall:  input.MarketImageSmall,
 		MarketImageBanner: input.MarketImageBanner,
+		Category:          category,
 	}
 
 	if err := db.SaveMarket(ctx, market); err != nil {

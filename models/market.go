@@ -60,4 +60,6 @@ type Market struct {
 	AssetImage         string `json:"asset_image,omitempty" firestore:"asset_image"`
 	MarketImageSmall   string `json:"market_image_small,omitempty" firestore:"market_image_small"`
 	MarketImageBanner  string `json:"market_image_banner,omitempty" firestore:"market_image_banner"`
+
+	Category string `json:"category" firestore:"category"`
 }

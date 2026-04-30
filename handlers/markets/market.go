@@ -19,6 +19,7 @@ func CreateMarketGEM(c *gin.Context) {
 		DurationSeconds   uint64 `json:"duration_seconds" binding:"required"`
 		MarketImageSmall  string `json:"market_image_small"`
 		MarketImageBanner string `json:"market_image_banner"`
+		Category          string `json:"category"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request: " + err.Error()})
@@ -33,6 +34,7 @@ func CreateMarketGEM(c *gin.Context) {
 		DurationSeconds:   req.DurationSeconds,
 		MarketImageSmall:  req.MarketImageSmall,
 		MarketImageBanner: req.MarketImageBanner,
+		Category:          req.Category,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create GEM market: " + err.Error()})
