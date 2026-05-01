@@ -21,7 +21,11 @@ info:
     ## Markets
     - **CAPPM** — Crypto Assets Price Prediction Markets. Binary YES/NO on BTC/ETH/SOL
       price at a future timestamp. Auto-created and auto-settled by the backend.
-    - **GEM** — General Event Markets. Any binary event. Created and settled manually via admin.
+      - **High-Frequency (≤ 1 hr):** Uses "Sample and Hold" — the strike is the spot price
+        at creation, and the direction is always **Above**.
+      - **Standard (> 1 hr):** Uses mathematical strike distances (ATR-based) and
+        momentum-driven directionality.
+    - **GEM** — General Event Markets. Any binary event. Created manually via admin.
     - Winning shares pay $1.00 USD each. Prices between $0.01–$0.99 per share.
 
     ## Order Placement Flow
