@@ -353,6 +353,187 @@ func SellAsset(c *gin.Context) {
 	})
 }
 
+func assetBalance(b *models.Balance, asset string) float64 {
+	switch asset {
+	case "sol":
+		return b.Sol
+	case "usdc_sol":
+		return b.USDCSol
+	case "usdt_sol":
+		return b.USDTSol
+	case "usdg_sol":
+		return b.USDGSol
+	case "eth_base":
+		return b.ETHBase
+	case "usdc_base":
+		return b.USDCBase
+	default:
+		return 0
+	}
+}
+
+func WithdrawAsset(c *gin.Context) {
+	emailStr, _ := c.Get("email")
+	email := emailStr.(string)
+
+	var req struct {
+		Asset              string  `json:"asset" binding:"required"`
+		Amount             float64 `json:"amount" binding:"required"`
+		DestinationAddress string  `json:"destination_address" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
+		return
+	}
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
+		return
+	}
+
+	chain := chainFromAsset(req.Asset)
+	isBase := chain == feeChainBase
+	if isBase && !strings.HasPrefix(strings.ToLower(req.DestinationAddress), "0x") {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Base asset requires a 0x destination address"})
+		return
+	}
+	if !isBase && strings.HasPrefix(strings.ToLower(req.DestinationAddress), "0x") {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Solana asset requires a Solana destination address"})
+		return
+	}
+
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found"})
+		return
+	}
+
+	var currentBalance float64
+	if req.Asset == "wsol" {
+		devnetBal, mainnetBal, err := services.GetWSOLBalances(wallet.SolPublicKey)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch WSOL balance"})
+			return
+		}
+		cluster := os.Getenv("SOLANA_CLUSTER")
+		if cluster == "" || cluster == "devnet" || cluster == "testnet" {
+			currentBalance = devnetBal
+		} else {
+			currentBalance = mainnetBal
+		}
+	} else {
+		balance, err := db.GetBalanceByEmail(c.Request.Context(), email)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "Balance not found"})
+			return
+		}
+		currentBalance = assetBalance(balance, req.Asset)
+		if currentBalance == 0 && assetBalance(balance, req.Asset) == 0 {
+			supported := map[string]bool{"sol": true, "usdc_sol": true, "usdt_sol": true, "usdg_sol": true, "eth_base": true, "usdc_base": true}
+			if !supported[req.Asset] {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "Unsupported asset"})
+				return
+			}
+		}
+	}
+
+	withdrawRate := feeRateForWithdraw(chain)
+	netAmount, feeAmount := applyFee(req.Amount, withdrawRate)
+	if netAmount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount too small after fee"})
+		return
+	}
+	if currentBalance < req.Amount {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Insufficient %s balance", req.Asset)})
+		return
+	}
+
+	if req.Asset != "wsol" {
+		if err := db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to reserve balance"})
+			return
+		}
+	}
+
+	go func() {
+		reverse := func() {
+			if req.Asset != "wsol" {
+				db.UpdateBalance(context.Background(), email, req.Asset, req.Amount)
+			}
+		}
+
+		var txHash string
+		var txErr error
+
+		switch req.Asset {
+		case "sol":
+			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
+			if err != nil {
+				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)
+				reverse()
+				return
+			}
+			txHash, txErr = services.TransferSol(decPriv, req.DestinationAddress, netAmount)
+		case "eth_base", "usdc_base":
+			txHash, txErr = services.TransferBaseAsset(wallet.BasePrivateKey, req.Asset, req.DestinationAddress, netAmount)
+		default:
+			mint, decimals, rpcURL := services.AssetMintConfig(req.Asset)
+			if mint == "" || rpcURL == "" {
+				log.Printf("[WithdrawAsset] unconfigured asset %s for %s", req.Asset, email)
+				reverse()
+				return
+			}
+			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
+			if err != nil {
+				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)
+				reverse()
+				return
+			}
+			txHash, txErr = services.TransferSPLToken(decPriv, req.DestinationAddress, mint, decimals, netAmount, rpcURL)
+		}
+
+		if txErr != nil {
+			log.Printf("[WithdrawAsset] transfer failed email=%s asset=%s to=%s: %v", email, req.Asset, req.DestinationAddress, txErr)
+			reverse()
+			return
+		}
+
+		log.Printf("[WithdrawAsset] success email=%s asset=%s to=%s gross=%.8f fee=%.8f net=%.8f tx=%s",
+			email, req.Asset, req.DestinationAddress, req.Amount, feeAmount, netAmount, txHash)
+
+		transaction := models.Transaction{
+			ID:        fmt.Sprintf("TX_%s", utils.RandomAlphanumeric(12)),
+			UserEmail: email,
+			Amount:    req.Amount,
+			FeeAmount: feeAmount,
+			FeeRate:   withdrawRate,
+			FeeChain:  string(chain),
+			FeeWallet: feeWalletForChain(chain),
+			Currency:  req.Asset,
+			Nature:    "real",
+			Type:      "asset_withdrawal",
+			Status:    "completed",
+			TxHash:    txHash,
+			CreatedAt: time.Now(),
+		}
+		if err := db.SaveTransaction(context.Background(), transaction); err != nil {
+			log.Printf("[WithdrawAsset] failed to save tx record %s: %v", email, err)
+		}
+
+		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"message":      "Asset withdrawal initiated",
+		"asset":        req.Asset,
+		"gross_amount": req.Amount,
+		"fee_amount":   feeAmount,
+		"net_amount":   netAmount,
+		"destination":  req.DestinationAddress,
+		"fee_wallet":   feeWalletForChain(chain),
+	})
+}
+
 func FundDemoAccount(c *gin.Context) {
 	emailStr, _ := c.Get("email")
 	email := emailStr.(string)

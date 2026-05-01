@@ -9,13 +9,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
-	confirm "github.com/gagliardetto/solana-go/rpc/sendAndConfirmTransaction"
-	"github.com/gagliardetto/solana-go/rpc/ws"
 )
 
 const privatePaymentsBase = "https://payments.magicblock.app"
@@ -124,20 +121,16 @@ func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, rec
 	if payResp.SendTo == "ephemeral" {
 		rpcURLs = []string{getEphemeralRPCURL()}
 	} else {
-		rpcURLs = append([]string{"https://devnet-router.magicblock.app"}, getFallbackRPCURLs()...)
+		// sendTo == "base" means submit to standard Solana RPC, not MagicBlock's router
+		rpcURLs = getFallbackRPCURLs()
 	}
 
 	for _, rpcURL := range rpcURLs {
-		wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
-		wsCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-		wsClient, wsErr := ws.Connect(wsCtx, wsURL)
-		if wsErr != nil {
-			cancel()
-			continue
-		}
+		sendCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 		rpcClient := rpc.New(rpcURL)
-		sig, sendErr := confirm.SendAndConfirmTransaction(wsCtx, rpcClient, wsClient, tx)
-		wsClient.Close()
+		sig, sendErr := rpcClient.SendTransactionWithOpts(sendCtx, tx, rpc.TransactionOpts{
+			SkipPreflight: true,
+		})
 		cancel()
 		if sendErr != nil {
 			continue

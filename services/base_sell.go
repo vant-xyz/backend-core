@@ -15,6 +15,35 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
+func TransferBaseAsset(encPriv, asset, toAddress string, amount float64) (string, error) {
+	if amount <= 0 {
+		return "", fmt.Errorf("amount must be positive")
+	}
+	privHex, err := Decrypt(encPriv)
+	if err != nil {
+		return "", err
+	}
+	privHex = strings.TrimPrefix(privHex, "0x")
+	key, err := crypto.HexToECDSA(privHex)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := ensureBaseGasSponsored(ctx, key); err != nil {
+		return "", err
+	}
+	to := common.HexToAddress(toAddress)
+	switch asset {
+	case "eth_base":
+		return sendBaseNativeWithHash(ctx, key, to, amount)
+	case "usdc_base":
+		return sendBaseUSDCWithHash(ctx, key, to, amount)
+	default:
+		return "", fmt.Errorf("unsupported base asset: %s", asset)
+	}
+}
+
 func TransferBaseAssetToVault(encPriv, asset string, amount float64) (string, error) {
 	if amount <= 0 {
 		return "", fmt.Errorf("amount must be positive")

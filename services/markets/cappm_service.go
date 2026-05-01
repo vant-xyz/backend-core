@@ -38,7 +38,6 @@ var devAssetConfigs = []assetDurationConfig{
 		Asset:        "BTC",
 		DataProvider: "coinbase",
 		Durations: []durationConfig{
-			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
 			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
 		},
 	},

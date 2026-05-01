@@ -252,19 +252,6 @@ func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) err
 
 	log.Printf("[Markets] SettleCAPPM complete: id=%s outcome=%s endPrice=%d tx=%s",
 		marketID, outcome, endPriceCents, txHash)
-
-	go func() {
-		pCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		result, err := ProcessMarketSettlement(pCtx, marketID, outcome)
-		if err != nil {
-			log.Printf("[Markets] CAPPM payout distribution failed for %s: %v", marketID, err)
-			return
-		}
-		log.Printf("[Markets] CAPPM payouts distributed: market=%s winners=%d losers=%d payout=%.2f refunds=%d",
-			marketID, result.WinningCount, result.LosingCount, result.TotalPayout, result.RefundedOrders)
-	}()
-
 	return nil
 }
 
@@ -410,7 +397,21 @@ func autoSettleCAPPM(ctx context.Context, marketID, asset string) error {
 		return fmt.Errorf("failed to fetch end price for %s at %s: %w", asset, market.EndTimeUTC, err)
 	}
 
-	return SettleCAPPM(ctx, marketID, endPriceCents)
+	if err := SettleCAPPM(ctx, marketID, endPriceCents); err != nil {
+		return err
+	}
+
+	outcome := resolveCAPPMOutcome(market.Direction, market.TargetPrice, endPriceCents)
+	pCtx, pCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer pCancel()
+	result, pErr := ProcessMarketSettlement(pCtx, marketID, outcome)
+	if pErr != nil {
+		log.Printf("[Markets] Auto-settler payout distribution failed for %s: %v", marketID, pErr)
+		return nil
+	}
+	log.Printf("[Markets] Auto-settler payouts distributed: market=%s winners=%d losers=%d payout=%.2f",
+		marketID, result.WinningCount, result.LosingCount, result.TotalPayout)
+	return nil
 }
 
 func resolveCAPPMOutcome(direction models.MarketDirection, targetPrice, endPrice uint64) models.MarketOutcome {

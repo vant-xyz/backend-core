@@ -352,6 +352,10 @@ components:
           type: string
           description: GEM only — Cloudinary URL for market banner image
           example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-banner.png"
+        category:
+          type: string
+          description: Market category label. Always "crypto" for CAPPMs. Free-form for GEMs (e.g. "sports", "politics", "crypto"). Defaults to "general".
+          example: "crypto"
 
     Order:
       type: object
@@ -1293,6 +1297,90 @@ paths:
                     example: "Withdrawal initiated"
         '400':
           description: Insufficient balance or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /balance/withdraw/asset:
+    post:
+      tags: [Balance]
+      summary: Withdraw a custodial wallet asset to an external address
+      description: |
+        Transfers an asset directly from the user's custodial wallet to a destination address.
+        Supports SOL, USDC/USDT/USDG on Solana, WSOL, ETH on Base, and USDC on Base.
+
+        The response is immediate. The on-chain transfer happens asynchronously.
+        If the transfer fails, any deducted balance is automatically reversed.
+        A `BALANCE_UPDATE` WebSocket event is broadcast on completion.
+
+        **WSOL note:** WSOL is an SPL token (wrapped SOL). Its balance is read live from
+        on-chain at request time rather than from the stored balance object.
+
+        Supported assets:
+        - `sol` — Native SOL (Solana)
+        - `usdc_sol` — USDC on Solana
+        - `usdt_sol` — USDT on Solana
+        - `usdg_sol` — USDG on Solana
+        - `wsol` — Wrapped SOL (SPL token, devnet or mainnet based on cluster)
+        - `eth_base` — ETH on Base
+        - `usdc_base` — USDC on Base
+
+        Withdrawal fees:
+        - Solana assets: 0%
+        - Base assets: 0.5%
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset, amount, destination_address]
+              properties:
+                asset:
+                  type: string
+                  enum: [sol, usdc_sol, usdt_sol, usdg_sol, wsol, eth_base, usdc_base]
+                  example: "usdc_sol"
+                amount:
+                  type: number
+                  description: Gross amount to withdraw (fee deducted from this)
+                  example: 10.00
+                destination_address:
+                  type: string
+                  description: Destination wallet address. Must be a Solana pubkey for Solana assets, 0x address for Base assets.
+                  example: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+      responses:
+        '200':
+          description: Asset withdrawal initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Asset withdrawal initiated"
+                  asset:
+                    type: string
+                    example: "usdc_sol"
+                  gross_amount:
+                    type: number
+                    example: 10.00
+                  fee_amount:
+                    type: number
+                    example: 0.00
+                  net_amount:
+                    type: number
+                    example: 10.00
+                  destination:
+                    type: string
+                  fee_wallet:
+                    type: string
+        '400':
+          description: Insufficient balance, unsupported asset, or address mismatch
           content:
             application/json:
               schema:
@@ -2243,6 +2331,10 @@ paths:
                   type: string
                   description: Cloudinary URL for market banner image
                   example: "https://res.cloudinary.com/vantic/image/upload/v1/gems/nigeria-afcon-banner.png"
+                category:
+                  type: string
+                  description: Free-form category label (e.g. "sports", "politics", "crypto"). Defaults to "general" if omitted.
+                  example: "sports"
       responses:
         '200':
           description: GEM created
