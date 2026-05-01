@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gagliardetto/solana-go"
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
@@ -351,6 +352,37 @@ func SellAsset(c *gin.Context) {
 		"net_receive":   netReceiveNaira,
 		"fee_wallet":    feeWalletForChain(sellChain),
 	})
+}
+
+func ConvertToUSDC(c *gin.Context) {
+	emailStr, _ := c.Get("email")
+	email := emailStr.(string)
+
+	wallet, err := db.GetWalletByEmail(c.Request.Context(), email)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Wallet not found"})
+		return
+	}
+
+	decPriv, err := services.Decrypt(wallet.SolPrivateKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Key unavailable"})
+		return
+	}
+
+	w, err := solana.WalletFromPrivateKeyBase58(decPriv)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Key parse error"})
+		return
+	}
+
+	results, err := services.DumpWalletToUSDC(c.Request.Context(), w.PrivateKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "swaps": results})
 }
 
 func assetBalance(b *models.Balance, asset string) float64 {

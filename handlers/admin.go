@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	solanago "github.com/gagliardetto/solana-go"
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
@@ -546,4 +547,26 @@ func AdminUploadImage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "url": url})
+}
+
+func DumpFeeWalletToUSDC(c *gin.Context) {
+	raw := os.Getenv("VANTIC_FEE_WALLET_SOL_PRIVATE_KEY")
+	if raw == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "VANTIC_FEE_WALLET_SOL_PRIVATE_KEY not set"})
+		return
+	}
+
+	w, err := solanago.WalletFromPrivateKeyBase58(raw)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to parse fee wallet key: " + err.Error()})
+		return
+	}
+
+	results, err := services.DumpWalletToUSDC(c.Request.Context(), w.PrivateKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "wallet": w.PublicKey().String(), "swaps": results})
 }

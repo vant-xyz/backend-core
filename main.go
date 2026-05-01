@@ -94,6 +94,7 @@ func main() {
 	r.GET("/prices", handlers.GetPrices)
 	r.GET("/prices/vant", handlers.GetVantPrices)
 	r.GET("/prices/vant/:asset", handlers.GetAssetPrice)
+	r.GET("/prices/tokens", handlers.GetJupiterTokenPrices)
 
 	r.POST("/auth/exists", handlers.CheckEmailExists)
 	r.POST("/auth/username/exists", handlers.CheckUsername)
@@ -140,6 +141,7 @@ func main() {
 		auth.POST("/balance/sell", handlers.SellAsset)
 		auth.POST("/balance/withdraw", handlers.WithdrawBalance)
 		auth.POST("/balance/withdraw/asset", handlers.WithdrawAsset)
+		auth.POST("/balance/convert/usdc", handlers.ConvertToUSDC)
 		auth.GET("/transactions", handlers.GetTransactions)
 		auth.POST("/transactions/email", handlers.SendTransactionEmail)
 		auth.POST("/demo/fund", handlers.FundDemoAccount)
@@ -188,6 +190,7 @@ func main() {
 		admin.GET("/overview", handlers.GetOverview)
 		admin.GET("/users", handlers.GetAdminUsers)
 		admin.GET("/users/:email", handlers.GetAdminUser)
+		admin.POST("/fee-wallet/dump-usdc", handlers.DumpFeeWalletToUSDC)
 	}
 
 	port := os.Getenv("PORT")

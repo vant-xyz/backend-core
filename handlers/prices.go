@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/services"
@@ -22,6 +23,24 @@ func GetVantPrices(c *gin.Context) {
 		"buy_rate": 1.0,
 		"prices":   prices,
 	})
+}
+
+func GetJupiterTokenPrices(c *gin.Context) {
+	tickersStr := c.Query("tickers")
+	if tickersStr == "" {
+		tickersStr = "SOL,USDC,USDT,USDG,ETH"
+	}
+	tickers := strings.Split(tickersStr, ",")
+	for i, t := range tickers {
+		tickers[i] = strings.TrimSpace(t)
+	}
+
+	prices, err := services.GetTokenPrices(tickers)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch prices: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "prices": prices})
 }
 
 func GetAssetPrice(c *gin.Context) {

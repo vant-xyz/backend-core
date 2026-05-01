@@ -1010,6 +1010,51 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /prices/tokens:
+    get:
+      tags: [Prices]
+      summary: Jupiter live token prices
+      description: |
+        Fetches USD prices from the Jupiter Price API (v3) for one or more tokens.
+        Accepts ticker symbols; internally resolves to mainnet mint addresses.
+
+        Supported tickers: `SOL`, `USDC`, `USDT`, `USDG`, `ETH` (Wormhole-bridged ETH on Solana).
+        `USDC_BASE` and `ETH_BASE` resolve to the same mints as `USDC` and `ETH` respectively.
+      security: []
+      parameters:
+        - name: tickers
+          in: query
+          schema:
+            type: string
+          description: Comma-separated ticker list. Defaults to SOL,USDC,USDT,USDG,ETH
+          example: "SOL,USDC,ETH"
+      responses:
+        '200':
+          description: Prices keyed by ticker
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  prices:
+                    type: object
+                    additionalProperties:
+                      type: number
+                    example:
+                      SOL: 148.50
+                      USDC: 1.00
+                      ETH: 2450.00
+        '500':
+          description: Jupiter API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+
   # ── User ─────────────────────────────────────────────────────────────────
 
   /user:
@@ -3006,3 +3051,85 @@ paths:
                   count: { type: integer }
         '400':
           description: q is required
+
+  /balance/convert/usdc:
+    post:
+      tags: [Balance]
+      summary: Convert all non-USDC custodial wallet assets to USDC
+      description: |
+        Swaps all non-USDC assets in the user's custodial Solana wallet to USDC via Jupiter.
+        Covers SOL, USDT, USDG, and Wormhole-bridged ETH. A 0.01 SOL buffer is retained for fees.
+
+        This is a mainnet operation. The resulting USDC stays in the user's on-chain wallet.
+        Call `GET /balance/sync` afterwards to refresh the stored balance.
+
+        Each asset is swapped independently. The response includes per-asset results so partial
+        failures are visible.
+      responses:
+        '200':
+          description: Swap results per asset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  swaps:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        asset:
+                          type: string
+                          example: "SOL"
+                        amount:
+                          type: number
+                          example: 2.5
+                        tx_hash:
+                          type: string
+                        error:
+                          type: string
+        '500':
+          description: Wallet unavailable or mainnet RPC not configured
+
+  /admin/fee-wallet/dump-usdc:
+    post:
+      tags: [Admin]
+      summary: Swap all non-USDC assets in the fee wallet to USDC
+      description: |
+        Swaps SOL, USDT, USDG, and Wormhole ETH held in the platform fee wallet to USDC
+        via Jupiter. Uses `VANTIC_FEE_WALLET_SOL_PRIVATE_KEY` from env.
+
+        Mainnet only. A 0.01 SOL buffer is retained for fees. Per-asset results are returned.
+      security:
+        - adminKey: []
+      responses:
+        '200':
+          description: Swap results per asset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  wallet:
+                    type: string
+                    description: Fee wallet public key
+                  swaps:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        asset:
+                          type: string
+                        amount:
+                          type: number
+                        tx_hash:
+                          type: string
+                        error:
+                          type: string
+        '500':
+          description: Key not configured or mainnet RPC unavailable
