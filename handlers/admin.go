@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -556,17 +557,18 @@ func DumpFeeWalletToUSDC(c *gin.Context) {
 		return
 	}
 
-	w, err := solanago.WalletFromPrivateKeyBase58(raw)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to parse fee wallet key: " + err.Error()})
+	var keyBytes []byte
+	if err := json.Unmarshal([]byte(raw), &keyBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to parse fee wallet key: " + err.Error()})
 		return
 	}
+	privKey := solanago.PrivateKey(keyBytes)
 
-	results, err := services.DumpWalletToUSDC(c.Request.Context(), w.PrivateKey)
+	results, err := services.DumpWalletToUSDC(c.Request.Context(), privKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "wallet": w.PublicKey().String(), "swaps": results})
+	c.JSON(http.StatusOK, gin.H{"success": true, "wallet": privKey.PublicKey().String(), "swaps": results})
 }
