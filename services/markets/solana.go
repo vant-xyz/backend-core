@@ -547,7 +547,7 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: settlerPub, IsSigner: true, IsWritable: true},
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
-		{PublicKey: magicProgramID, IsSigner: false, IsWritable: false},
+		{PublicKey: magicProgramID, IsSigner: false, IsWritable: true},
 		{PublicKey: magicContextID, IsSigner: false, IsWritable: true},
 	}, data)
 
@@ -605,7 +605,7 @@ func SettleMarketGEM(marketID string, outcome uint8, outcomeDescription string) 
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: settlerPub, IsSigner: true, IsWritable: true},
 		{PublicKey: solana.SysVarInstructionsPubkey, IsSigner: false, IsWritable: false},
-		{PublicKey: magicProgramID, IsSigner: false, IsWritable: false},
+		{PublicKey: magicProgramID, IsSigner: false, IsWritable: true},
 		{PublicKey: magicContextID, IsSigner: false, IsWritable: true},
 	}, data)
 
