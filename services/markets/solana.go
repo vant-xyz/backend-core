@@ -186,6 +186,68 @@ func sendAndConfirm(
 	return "", fmt.Errorf("all RPC endpoints failed: %w", lastErr)
 }
 
+func sendToEphemeral(
+	instructions []solana.Instruction,
+	signers []solana.PrivateKey,
+	feePayer solana.PublicKey,
+) (string, error) {
+	rpcURL := getEphemeralRPCURL()
+	client := rpc.New(rpcURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+
+	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentProcessed)
+	if err != nil {
+		return "", fmt.Errorf("ephemeral GetLatestBlockhash failed: %w", err)
+	}
+
+	allInstructions := append(
+		[]solana.Instruction{computebudget.NewSetComputeUnitPriceInstruction(100000).Build()},
+		instructions...,
+	)
+
+	tx, err := solana.NewTransaction(allInstructions, recent.Value.Blockhash, solana.TransactionPayer(feePayer))
+	if err != nil {
+		return "", fmt.Errorf("failed to build transaction: %w", err)
+	}
+
+	keyMap := make(map[solana.PublicKey]*solana.PrivateKey, len(signers))
+	for i := range signers {
+		keyMap[signers[i].PublicKey()] = &signers[i]
+	}
+	if _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey { return keyMap[key] }); err != nil {
+		return "", fmt.Errorf("failed to sign transaction: %w", err)
+	}
+
+	sig, err := client.SendTransactionWithOpts(ctx, tx, rpc.TransactionOpts{SkipPreflight: true})
+	if err != nil {
+		return "", fmt.Errorf("ephemeral SendTransaction failed: %w", err)
+	}
+
+	pollCtx, pollCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer pollCancel()
+
+	for {
+		select {
+		case <-pollCtx.Done():
+			return "", fmt.Errorf("ephemeral tx %s not confirmed within 60s", sig)
+		case <-time.After(2 * time.Second):
+			statuses, err := client.GetSignatureStatuses(pollCtx, true, sig)
+			if err != nil || statuses == nil || len(statuses.Value) == 0 || statuses.Value[0] == nil {
+				continue
+			}
+			s := statuses.Value[0]
+			if s.Err != nil {
+				return "", fmt.Errorf("ephemeral tx %s failed on-chain: %v", sig, s.Err)
+			}
+			if s.ConfirmationStatus == rpc.ConfirmationStatusConfirmed || s.ConfirmationStatus == rpc.ConfirmationStatusFinalized {
+				return sig.String(), nil
+			}
+		}
+	}
+}
+
 // buildEd25519VerifyInstruction constructs the Ed25519Program verify instruction
 // manually by packing the instruction data according to the Solana Ed25519
 // native program spec:
@@ -489,8 +551,7 @@ func SettleMarketCAPPM(marketID string, endPriceCents uint64) (string, error) {
 		{PublicKey: magicContextID, IsSigner: false, IsWritable: true},
 	}, data)
 
-	return sendAndConfirm(
-		[]string{getEphemeralRPCURL()},
+	return sendToEphemeral(
 		[]solana.Instruction{ed25519Ix, settleIx},
 		[]solana.PrivateKey{settlerKey},
 		settlerPub,
