@@ -15,6 +15,12 @@ import (
 const PRODUCTION = false
 
 const (
+	btcImageURL = "https://res.cloudinary.com/do7auvvvo/image/upload/v1777654234/vant_markets/1777654234317.png.png"
+	ethImageURL = "https://res.cloudinary.com/do7auvvvo/image/upload/v1777654395/vant_markets/1777654394605.png.png"
+	solImageURL = "https://res.cloudinary.com/do7auvvvo/image/upload/v1777654494/vant_markets/1777654493902.jpg.jpg"
+)
+
+const (
 	cappmMinYesProbability = 0.35
 	cappmMaxYesZScore      = 0.385320466
 )
@@ -24,6 +30,7 @@ var cappmLog = log.New(os.Stdout, "[CAPPM-SERVICE] ", log.Ldate|log.Ltime|log.Lm
 type assetDurationConfig struct {
 	Asset        string
 	DataProvider string
+	AssetImage   string
 	Durations    []durationConfig
 }
 
@@ -37,6 +44,23 @@ var devAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "BTC",
 		DataProvider: "coinbase",
+		AssetImage:   btcImageURL,
+		Durations: []durationConfig{
+			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
+		},
+	},
+	{
+		Asset:        "ETH",
+		DataProvider: "coinbase",
+		AssetImage:   ethImageURL,
+		Durations: []durationConfig{
+			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
+		},
+	},
+	{
+		Asset:        "SOL",
+		DataProvider: "coinbase",
+		AssetImage:   solImageURL,
 		Durations: []durationConfig{
 			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
 		},
@@ -47,6 +71,7 @@ var prodAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "BTC",
 		DataProvider: "coinbase",
+		AssetImage:   btcImageURL,
 		Durations: []durationConfig{
 			{Seconds: 180, Label: "3min", FallbackVolatilityFactor: 0.004},
 			{Seconds: 300, Label: "5min", FallbackVolatilityFactor: 0.006},
@@ -57,7 +82,9 @@ var prodAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "ETH",
 		DataProvider: "coinbase",
+		AssetImage:   ethImageURL,
 		Durations: []durationConfig{
+			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
 			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
 			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
 		},
@@ -65,7 +92,9 @@ var prodAssetConfigs = []assetDurationConfig{
 	{
 		Asset:        "SOL",
 		DataProvider: "coinbase",
+		AssetImage:   solImageURL,
 		Durations: []durationConfig{
+			{Seconds: 900, Label: "15min", FallbackVolatilityFactor: 0.010},
 			{Seconds: 1800, Label: "30min", FallbackVolatilityFactor: 0.015},
 			{Seconds: 3600, Label: "1hr", FallbackVolatilityFactor: 0.020},
 			{Seconds: 21600, Label: "6hr", FallbackVolatilityFactor: 0.035},
@@ -236,20 +265,23 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 		return nil, fmt.Errorf("failed to fetch current price for %s: %w", asset.Asset, err)
 	}
 
-	momentumPriceCents, err := GetMomentumPrice(asset.Asset)
-	if err != nil {
-		cappmLog.Printf("[%s-%s] Momentum price unavailable, defaulting direction to Above: %v",
-			asset.Asset, dur.Label, err)
-		momentumPriceCents = currentPriceCents
+	var direction models.MarketDirection
+	var targetPriceCents uint64
+
+	if dur.Seconds <= 3600 {
+		direction = models.DirectionAbove
+		targetPriceCents = currentPriceCents
+		cappmLog.Printf("[%s-%s] Fast market (Sample-and-Hold): target=%d", asset.Asset, dur.Label, targetPriceCents)
+	} else {
+		momentumPriceCents, err := GetMomentumPrice(asset.Asset)
+		if err != nil {
+			momentumPriceCents = currentPriceCents
+		}
+		volatilityFactor := GetATRVolatilityFactor(asset.Asset, dur.Seconds, dur.FallbackVolatilityFactor)
+		direction, targetPriceCents = calculateTarget(currentPriceCents, momentumPriceCents, dur.Seconds, volatilityFactor)
+		cappmLog.Printf("[%s-%s] Slow market (Math-driven): target=%d direction=%s", asset.Asset, dur.Label, targetPriceCents, direction)
 	}
 
-	volatilityFactor := GetATRVolatilityFactor(asset.Asset, dur.Seconds, dur.FallbackVolatilityFactor)
-
-	cappmLog.Printf("[%s-%s] volatility_factor=%.6f (fallback=%.6f) current=%d momentum=%d",
-		asset.Asset, dur.Label, volatilityFactor, dur.FallbackVolatilityFactor,
-		currentPriceCents, momentumPriceCents)
-
-	direction, targetPriceCents := calculateTarget(currentPriceCents, momentumPriceCents, dur.Seconds, volatilityFactor)
 	startTime := time.Now().UTC().Add(5 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -265,6 +297,7 @@ func createNextCappm(asset assetDurationConfig, dur durationConfig) (*models.Mar
 		DataProvider:    asset.DataProvider,
 		StartTimeUTC:    startTime,
 		DurationSeconds: dur.Seconds,
+		AssetImage:      asset.AssetImage,
 	})
 }
 
