@@ -386,22 +386,24 @@ func ForceSettleCAPPM(c *gin.Context) {
 		return
 	}
 
-	go func() {
-		market, err := marketsvc.GetMarketByID(context.Background(), marketID)
-		if err != nil {
-			log.Printf("[Admin] cappm-settle: failed to load market %s for payout dispatch: %v", marketID, err)
-			return
-		}
-		pCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		result, err := marketsvc.ProcessMarketSettlement(pCtx, marketID, market.Outcome)
-		if err != nil {
-			log.Printf("[Admin] cappm-settle: payout distribution failed for %s: %v", marketID, err)
-			return
-		}
-		log.Printf("[Admin] cappm-settle: payouts distributed: market=%s winners=%d payout=%.2f",
-			marketID, result.WinningCount, result.TotalPayout)
-	}()
+	if !req.SkipOnchain {
+		go func() {
+			market, err := marketsvc.GetMarketByID(context.Background(), marketID)
+			if err != nil {
+				log.Printf("[Admin] cappm-settle: failed to load market %s for payout dispatch: %v", marketID, err)
+				return
+			}
+			pCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			result, err := marketsvc.ProcessMarketSettlement(pCtx, marketID, market.Outcome)
+			if err != nil {
+				log.Printf("[Admin] cappm-settle: payout distribution failed for %s: %v", marketID, err)
+				return
+			}
+			log.Printf("[Admin] cappm-settle: payouts distributed: market=%s winners=%d payout=%.2f",
+				marketID, result.WinningCount, result.TotalPayout)
+		}()
+	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "market_id": marketID, "end_price_cents": req.EndPriceCents})
 }
