@@ -382,6 +382,41 @@ func TransferSPLToken(senderPrivateKey, recipientPublicKey, mintPublicKey string
 	return sig.String(), nil
 }
 
+func AssetMintConfig(asset string) (mint string, decimals uint8, rpcURL string) {
+	cluster := os.Getenv("SOLANA_CLUSTER")
+	if cluster == "" {
+		cluster = "devnet"
+	}
+	isDevnet := cluster == "devnet" || cluster == "testnet"
+
+	switch asset {
+	case "usdc_sol":
+		if isDevnet {
+			return os.Getenv("DEVNET_SOL_USDC_MINT"), 6, os.Getenv("DEVNET_SOLANA_RPC_URL")
+		}
+		return os.Getenv("MAINNET_SOL_USDC_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "usdt_sol":
+		return os.Getenv("MAINNET_SOL_USDT_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "usdg_sol":
+		return os.Getenv("MAINNET_SOL_USDG_MINT"), 6, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	case "wsol":
+		if isDevnet {
+			m := os.Getenv("DEVNET_SOL_WSOL_MINT")
+			if m == "" {
+				m = defaultWSOLMint
+			}
+			return m, 9, os.Getenv("DEVNET_SOLANA_RPC_URL")
+		}
+		m := os.Getenv("MAINNET_SOL_WSOL_MINT")
+		if m == "" {
+			m = defaultWSOLMint
+		}
+		return m, 9, os.Getenv("MAINNET_SOLANA_RPC_URL")
+	default:
+		return "", 0, ""
+	}
+}
+
 func FundDemoAccount(recipientPubKey string, amountSol float64) (string, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	wsURL := strings.Replace(rpcURL, "https://", "wss://", 1)
