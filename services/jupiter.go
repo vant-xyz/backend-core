@@ -60,10 +60,6 @@ type priceEntry struct {
 	PriceChange24h float64 `json:"priceChange24h"`
 }
 
-type priceV3Response struct {
-	Data map[string]priceEntry `json:"data"`
-}
-
 func GetTokenPrices(tickers []string) (map[string]float64, error) {
 	mintToTicker := map[string]string{}
 	var mints []string
@@ -101,13 +97,13 @@ func GetTokenPrices(tickers []string) (map[string]float64, error) {
 		return nil, fmt.Errorf("jupiter price API %d: %s", resp.StatusCode, string(body))
 	}
 
-	var priceResp priceV3Response
+	var priceResp map[string]priceEntry
 	if err := json.NewDecoder(resp.Body).Decode(&priceResp); err != nil {
 		return nil, fmt.Errorf("decode jupiter price response: %w", err)
 	}
 
 	result := map[string]float64{}
-	for mint, entry := range priceResp.Data {
+	for mint, entry := range priceResp {
 		if ticker, ok := mintToTicker[mint]; ok {
 			result[ticker] = entry.USDPrice
 		}
