@@ -5,8 +5,10 @@ import (
 	"log"
 	"math"
 	"math/rand/v2"
+	"sync"
 	"time"
 
+	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
 )
 
@@ -19,6 +21,7 @@ const (
 )
 
 var takerBotPool []string
+var activeProviders sync.Map
 
 var botEmails = []string{
 	"carsonpine@hotmail.com", "quaddavid4@hotmail.com", "vant.charlie@testmail.com",
@@ -42,18 +45,46 @@ func StartLiquidityProvider(market *models.Market) {
 		log.Printf("[Liquidity] Disabled on mainnet for %s", market.ID)
 		return
 	}
-	if market.MarketType != models.MarketTypeCAPPM {
+
+	if _, loaded := activeProviders.LoadOrStore(market.ID, true); loaded {
 		return
 	}
+
+	// Bots now support both CAPPM and GEM
 	go runLiquidityLifecycle(market)
+}
+
+func StartGlobalLiquidityManager() {
+	if isMainnet {
+		return
+	}
+
+	ctx := context.Background()
+	markets, err := db.GetActiveMarkets(ctx)
+	if err != nil {
+		log.Printf("[LiquidityManager] Failed to fetch active markets: %v", err)
+		return
+	}
+
+	log.Printf("[LiquidityManager] Found %d active markets to seed", len(markets))
+	for _, m := range markets {
+		market := m // copy for closure
+		go StartLiquidityProvider(&market)
+	}
 }
 
 func runLiquidityLifecycle(market *models.Market) {
 	log.Printf("[Liquidity] Starting lifecycle for %s", market.ID)
+	defer activeProviders.Delete(market.ID)
+
 	ctx := context.Background()
 	seedInitialLiquidity(ctx, market)
 
-	go runIntelligentTradingLoop(market)
+	if market.MarketType == models.MarketTypeCAPPM {
+		go runIntelligentTradingLoop(market)
+	} else {
+		go runRandomTradingLoop(market)
+	}
 
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
@@ -120,9 +151,17 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 }
 
 func updateLiquidity(ctx context.Context, market *models.Market) {
-	prob, err := computeFairValue(market)
-	if err != nil {
-		return
+	var prob float64
+	var err error
+
+	if market.MarketType == models.MarketTypeCAPPM {
+		prob, err = computeFairValue(market)
+		if err != nil {
+			return
+		}
+	} else {
+		// GEM markets just hover around 0.5 fair value
+		prob = 0.5
 	}
 
 	jitter := (rand.Float64() * 0.04) - 0.02
@@ -272,6 +311,49 @@ func runIntelligentTradingLoop(market *models.Market) {
 			return
 		}
 	}
+}
+
+func runRandomTradingLoop(market *models.Market) {
+	ticker := time.NewTicker(15*time.Second + time.Duration(rand.IntN(10))*time.Second)
+	defer ticker.Stop()
+	deadline := time.NewTimer(time.Until(market.EndTimeUTC))
+	defer deadline.Stop()
+	ctx := context.Background()
+	for {
+		select {
+		case <-ticker.C:
+			m, err := GetMarketByID(ctx, market.ID)
+			if err != nil || m.Status != models.MarketStatusActive {
+				return
+			}
+			randomTrade(ctx, m)
+		case <-deadline.C:
+			return
+		}
+	}
+}
+
+func randomTrade(ctx context.Context, market *models.Market) {
+	side := models.OrderSideYes
+	if rand.IntN(2) == 0 {
+		side = models.OrderSideNo
+	}
+
+	qty := math.Round(5 + rand.Float64()*45)
+	bot := takerBotPool[rand.IntN(len(takerBotPool))]
+
+	if _, err := PlaceOrder(ctx, PlaceOrderInput{
+		UserEmail: bot,
+		MarketID:  market.ID,
+		Side:      side,
+		Type:      models.OrderTypeMarket,
+		Quantity:  qty,
+		IsDemo:    true,
+	}); err != nil {
+		log.Printf("[RandomBot] skip bot=%s side=%s market=%s: %v", bot, side, market.ID, err)
+		return
+	}
+	log.Printf("[RandomBot] market=%s side=%s qty=%.0f", market.ID, side, qty)
 }
 
 func intelligentTrade(ctx context.Context, market *models.Market) {

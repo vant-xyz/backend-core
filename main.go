@@ -47,6 +47,7 @@ func main() {
 
 	services.StartPricePoller()
 	marketsvc.StartCAPPMService()
+	marketsvc.StartGlobalLiquidityManager()
 	marketsvc.GetMatchingEngine()
 	marketsvc.GetOrderbookHub()
 

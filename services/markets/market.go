@@ -178,6 +178,8 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 		return nil, fmt.Errorf("failed to save GEM market: %w", err)
 	}
 
+	StartLiquidityProvider(market)
+
 	log.Printf("[Markets] CreateGEM complete: id=%s pda=%s tx=%s", marketID, marketPDA, txHash)
 	return market, nil
 }
