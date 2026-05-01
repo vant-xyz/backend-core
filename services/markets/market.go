@@ -250,6 +250,12 @@ func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) err
 		return fmt.Errorf("failed to update CAPPM market after settlement: %w", err)
 	}
 
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer payoutCancel()
+	if _, err := ProcessMarketSettlement(payoutCtx, marketID, outcome); err != nil {
+		log.Printf("[Markets] SettleCAPPM payout distribution failed for %s: %v", marketID, err)
+	}
+
 	log.Printf("[Markets] SettleCAPPM complete: id=%s outcome=%s endPrice=%d tx=%s",
 		marketID, outcome, endPriceCents, txHash)
 	return nil
@@ -288,6 +294,12 @@ func SettleGEM(ctx context.Context, input SettleGEMInput) error {
 		"resolved_at":         now,
 	}); err != nil {
 		return fmt.Errorf("failed to update GEM market after settlement: %w", err)
+	}
+
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer payoutCancel()
+	if _, err := ProcessMarketSettlement(payoutCtx, input.MarketID, input.Outcome); err != nil {
+		log.Printf("[Markets] SettleGEM payout distribution failed for %s: %v", input.MarketID, err)
 	}
 
 	log.Printf("[Markets] SettleGEM complete: id=%s outcome=%s tx=%s",
