@@ -368,14 +368,21 @@ func ForceSettleCAPPM(c *gin.Context) {
 
 	var req struct {
 		EndPriceCents uint64 `json:"end_price_cents" binding:"required"`
+		SkipOnchain   bool   `json:"skip_onchain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "end_price_cents (integer) required"})
 		return
 	}
 
-	if err := marketsvc.SettleCAPPM(c.Request.Context(), marketID, req.EndPriceCents); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "settlement failed: " + err.Error()})
+	var settleErr error
+	if req.SkipOnchain {
+		settleErr = marketsvc.SettleCAPPMOffChain(c.Request.Context(), marketID, req.EndPriceCents)
+	} else {
+		settleErr = marketsvc.SettleCAPPM(c.Request.Context(), marketID, req.EndPriceCents)
+	}
+	if settleErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "settlement failed: " + settleErr.Error()})
 		return
 	}
 

@@ -213,6 +213,44 @@ func CreateCAPPMFromAdmin(ctx context.Context, input CreateCAPPMFromAdminInput) 
 	})
 }
 
+func SettleCAPPMOffChain(ctx context.Context, marketID string, endPriceCents uint64) error {
+	market, err := GetMarketByID(ctx, marketID)
+	if err != nil {
+		return fmt.Errorf("market not found: %w", err)
+	}
+	if market.Status == models.MarketStatusResolved {
+		return fmt.Errorf("market %s is already resolved", marketID)
+	}
+	if market.MarketType != models.MarketTypeCAPPM {
+		return fmt.Errorf("market %s is not a CAPPM market", marketID)
+	}
+
+	outcome := resolveCAPPMOutcome(market.Direction, market.TargetPrice, endPriceCents)
+	dollars := endPriceCents / 100
+	cents := endPriceCents % 100
+	outcomeDescription := fmt.Sprintf("%s closed at $%d.%02d on %s", market.Asset, dollars, cents, market.DataProvider)
+
+	now := time.Now()
+	if err := db.UpdateMarketFields(ctx, marketID, map[string]interface{}{
+		"status":              string(models.MarketStatusResolved),
+		"outcome":             string(outcome),
+		"outcome_description": outcomeDescription,
+		"end_price":           endPriceCents,
+		"resolved_at":         now,
+	}); err != nil {
+		return fmt.Errorf("failed to update CAPPM market: %w", err)
+	}
+
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer payoutCancel()
+	if _, err := ProcessMarketSettlement(payoutCtx, marketID, outcome); err != nil {
+		log.Printf("[Markets] SettleCAPPMOffChain payout distribution failed for %s: %v", marketID, err)
+	}
+
+	log.Printf("[Markets] SettleCAPPMOffChain complete: id=%s outcome=%s endPrice=%d", marketID, outcome, endPriceCents)
+	return nil
+}
+
 func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) error {
 	market, err := GetMarketByID(ctx, marketID)
 	if err != nil {

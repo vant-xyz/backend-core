@@ -156,6 +156,8 @@ func runCappmLoop(asset assetDurationConfig, dur durationConfig) {
 	}
 }
 
+const maxSettleAttempts = 10
+
 func settleWithRetry(loopID, marketID, asset string) {
 	attempt := 0
 	for {
@@ -185,6 +187,24 @@ func settleWithRetry(loopID, marketID, asset string) {
 		if market.Status == models.MarketStatusResolved {
 			cancel()
 			cappmLog.Printf("[%s] Market %s already resolved externally", loopID, marketID)
+			return
+		}
+
+		if attempt > maxSettleAttempts {
+			cappmLog.Printf("[%s] On-chain settlement exhausted for %s after %d attempts — falling back to off-chain",
+				loopID, marketID, maxSettleAttempts)
+			endPriceCents, priceErr := GetHistoricalPrice(asset, market.EndTimeUTC)
+			if priceErr != nil {
+				cancel()
+				cappmLog.Printf("[%s] Off-chain fallback price fetch failed for %s: %v", loopID, marketID, priceErr)
+				return
+			}
+			if offErr := SettleCAPPMOffChain(ctx, marketID, endPriceCents); offErr != nil {
+				cappmLog.Printf("[%s] Off-chain fallback settlement failed for %s: %v", loopID, marketID, offErr)
+			} else {
+				cappmLog.Printf("[%s] Off-chain settlement complete for %s", loopID, marketID)
+			}
+			cancel()
 			return
 		}
 
