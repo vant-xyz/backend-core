@@ -531,7 +531,13 @@ func sendVSInstructionPreferEphemeral(
 
 func isVSChainReadyForWrites(chainState string) bool {
 	switch chainState {
-	case "CHAIN_CREATED", "CHAIN_JOINED", "CHAIN_CONFIRMED":
+	case "CHAIN_CREATED",
+		"CHAIN_JOINED",
+		"CHAIN_CONFIRMED",
+		"PENDING_CHAIN_JOIN",
+		"PENDING_CHAIN_CONFIRM",
+		"PENDING_CHAIN_RESOLVE",
+		"PENDING_CHAIN_CANCEL":
 		return true
 	default:
 		return false
