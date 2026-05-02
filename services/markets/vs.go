@@ -393,7 +393,7 @@ func joinVSEventOnchain(eventID, userEmail string) (string, error) {
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func confirmVSEventOnchain(eventID, userEmail string, outcome models.VSOutcome) (string, error) {
@@ -426,7 +426,7 @@ func confirmVSEventOnchain(eventID, userEmail string, outcome models.VSOutcome) 
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func resolveVSEventOnchain(eventID, creatorEmail string, outcome models.VSOutcome, desc string) (string, error) {
@@ -460,7 +460,7 @@ func resolveVSEventOnchain(eventID, creatorEmail string, outcome models.VSOutcom
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func cancelVSEventOnchain(eventID, creatorEmail string) (string, error) {
@@ -488,7 +488,7 @@ func cancelVSEventOnchain(eventID, creatorEmail string) (string, error) {
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func getUserSolanaPrivateKey(email string) (solana.PrivateKey, error) {

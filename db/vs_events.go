@@ -28,7 +28,18 @@ func UpdateVSEventChainStateIfNotTerminal(ctx context.Context, eventID, newState
 		UPDATE vs_events
 		SET chain_state = $1, updated_at = $2
 		WHERE id = $3
-		  AND chain_state NOT IN ('CHAIN_RESOLVED','CHAIN_CANCELLED','PENDING_CHAIN_RESOLVE','PENDING_CHAIN_CANCEL')
+		  AND chain_state NOT IN (
+		    'CHAIN_RESOLVED',
+		    'CHAIN_CANCELLED',
+		    'PENDING_CHAIN_RESOLVE',
+		    'PENDING_CHAIN_CANCEL',
+		    'CHAIN_CREATE_FAILED',
+		    'CHAIN_DELEGATE_FAILED',
+		    'CHAIN_JOIN_FAILED',
+		    'CHAIN_CONFIRM_FAILED',
+		    'CHAIN_RESOLVE_FAILED',
+		    'CHAIN_CANCEL_FAILED'
+		  )
 	`, newState, time.Now().UTC(), eventID)
 	return err
 }
