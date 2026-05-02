@@ -301,6 +301,38 @@ func SettleCAPPM(ctx context.Context, marketID string, endPriceCents uint64) err
 	return nil
 }
 
+func SettleGEMOffChain(ctx context.Context, marketID string, outcome models.MarketOutcome, outcomeDescription string) error {
+	market, err := GetMarketByID(ctx, marketID)
+	if err != nil {
+		return fmt.Errorf("market not found: %w", err)
+	}
+	if market.Status == models.MarketStatusResolved {
+		return fmt.Errorf("market %s is already resolved", marketID)
+	}
+	if market.MarketType != models.MarketTypeGEM {
+		return fmt.Errorf("market %s is not a GEM market", marketID)
+	}
+
+	now := time.Now()
+	if err := db.UpdateMarketFields(ctx, marketID, map[string]interface{}{
+		"status":              string(models.MarketStatusResolved),
+		"outcome":             string(outcome),
+		"outcome_description": outcomeDescription,
+		"resolved_at":         now,
+	}); err != nil {
+		return fmt.Errorf("failed to update GEM market: %w", err)
+	}
+
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer payoutCancel()
+	if _, err := ProcessMarketSettlement(payoutCtx, marketID, outcome); err != nil {
+		log.Printf("[Markets] SettleGEMOffChain payout distribution failed for %s: %v", marketID, err)
+	}
+
+	log.Printf("[Markets] SettleGEMOffChain complete: id=%s outcome=%s", marketID, outcome)
+	return nil
+}
+
 func SettleGEM(ctx context.Context, input SettleGEMInput) error {
 	market, err := GetMarketByID(ctx, input.MarketID)
 	if err != nil {
@@ -322,7 +354,8 @@ func SettleGEM(ctx context.Context, input SettleGEMInput) error {
 
 	txHash, err := SettleMarketGEM(input.MarketID, outcomeByte, input.OutcomeDescription)
 	if err != nil {
-		return fmt.Errorf("SettleMarketGEM onchain failed: %w", err)
+		log.Printf("[Markets] SettleGEM on-chain failed for %s: %v. Falling back to off-chain.", input.MarketID, err)
+		return SettleGEMOffChain(ctx, input.MarketID, input.Outcome, input.OutcomeDescription)
 	}
 
 	now := time.Now()
