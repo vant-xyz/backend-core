@@ -745,7 +745,7 @@ components:
           type: string
         chain_state:
           type: string
-          description: Optimistic chain synchronization status
+          description: Optimistic chain synchronization status; may move through pending/failed states before terminal chain confirmation
         join_deadline_utc:
           type: string
           format: date-time

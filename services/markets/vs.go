@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
@@ -96,6 +97,11 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		if err != nil {
 			log.Printf("[VS] create onchain failed for %s: %v", evID, err)
 			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CREATE_FAILED")
+			return
+		}
+		if _, err := DelegateMarket(evID); err != nil {
+			log.Printf("[VS] delegate failed for %s: %v", evID, err)
+			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_DELEGATE_FAILED")
 			return
 		}
 		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"creation_tx_hash": tx})
@@ -203,7 +209,7 @@ func ConfirmVSEventOutcome(ctx context.Context, eventID, userEmail string, outco
 			log.Printf("[VS] ledger settle failed for %s: %v", event.ID, err)
 		}
 		go func(evID string, out models.VSOutcome) {
-			tx, err := resolveVSEventOnchain(evID, out, "Resolved by confirmations")
+			tx, err := resolveVSEventOnchain(evID, event.CreatorEmail, out, "Resolved by confirmations")
 			if err != nil {
 				log.Printf("[VS] resolve onchain failed for %s: %v", evID, err)
 				_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_RESOLVE_FAILED"})
@@ -269,7 +275,7 @@ func CancelVSEvent(ctx context.Context, eventID, requester string) (*models.VSEv
 		"chain_state": "PENDING_CHAIN_CANCEL",
 	})
 	go func(evID string) {
-		if _, err := cancelVSEventOnchain(evID); err != nil {
+		if _, err := cancelVSEventOnchain(evID, event.CreatorEmail); err != nil {
 			log.Printf("[VS] cancel onchain failed for %s: %v", evID, err)
 			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CANCEL_FAILED"})
 			return
@@ -341,7 +347,11 @@ func createVSEventOnchain(eventID string, input CreateVSEventInput) (string, err
 	if err != nil {
 		return "", err
 	}
-	settlerKey, err := getSettlerKeypair()
+	creatorKey, err := getUserSolanaPrivateKey(input.CreatorEmail)
+	if err != nil {
+		return "", err
+	}
+	feePayerKey, err := getFeePayerSolanaPrivateKey()
 	if err != nil {
 		return "", err
 	}
@@ -352,18 +362,22 @@ func createVSEventOnchain(eventID string, input CreateVSEventInput) (string, err
 	data := buildVSEventData(eventID, input)
 	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlerKey.PublicKey(), IsSigner: true, IsWritable: true},
+		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: true},
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}, data)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, settlerKey.PublicKey())
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
-func joinVSEventOnchain(eventID, _ string) (string, error) {
+func joinVSEventOnchain(eventID, userEmail string) (string, error) {
 	programID, err := getProgramID()
 	if err != nil {
 		return "", err
 	}
-	settlerKey, err := getSettlerKeypair()
+	userKey, err := getUserSolanaPrivateKey(userEmail)
+	if err != nil {
+		return "", err
+	}
+	feePayerKey, err := getFeePayerSolanaPrivateKey()
 	if err != nil {
 		return "", err
 	}
@@ -377,17 +391,21 @@ func joinVSEventOnchain(eventID, _ string) (string, error) {
 	writeString(buf, &o, eventID)
 	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlerKey.PublicKey(), IsSigner: true, IsWritable: false},
+		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, settlerKey.PublicKey())
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
-func confirmVSEventOnchain(eventID, _ string, outcome models.VSOutcome) (string, error) {
+func confirmVSEventOnchain(eventID, userEmail string, outcome models.VSOutcome) (string, error) {
 	programID, err := getProgramID()
 	if err != nil {
 		return "", err
 	}
-	settlerKey, err := getSettlerKeypair()
+	userKey, err := getUserSolanaPrivateKey(userEmail)
+	if err != nil {
+		return "", err
+	}
+	feePayerKey, err := getFeePayerSolanaPrivateKey()
 	if err != nil {
 		return "", err
 	}
@@ -406,17 +424,21 @@ func confirmVSEventOnchain(eventID, _ string, outcome models.VSOutcome) (string,
 	writeU8(buf, &o, ov)
 	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlerKey.PublicKey(), IsSigner: true, IsWritable: false},
+		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, settlerKey.PublicKey())
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
-func resolveVSEventOnchain(eventID string, outcome models.VSOutcome, desc string) (string, error) {
+func resolveVSEventOnchain(eventID, creatorEmail string, outcome models.VSOutcome, desc string) (string, error) {
 	programID, err := getProgramID()
 	if err != nil {
 		return "", err
 	}
-	settlerKey, err := getSettlerKeypair()
+	creatorKey, err := getUserSolanaPrivateKey(creatorEmail)
+	if err != nil {
+		return "", err
+	}
+	feePayerKey, err := getFeePayerSolanaPrivateKey()
 	if err != nil {
 		return "", err
 	}
@@ -436,17 +458,21 @@ func resolveVSEventOnchain(eventID string, outcome models.VSOutcome, desc string
 	writeString(buf, &o, desc)
 	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlerKey.PublicKey(), IsSigner: true, IsWritable: false},
+		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, settlerKey.PublicKey())
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
-func cancelVSEventOnchain(eventID string) (string, error) {
+func cancelVSEventOnchain(eventID, creatorEmail string) (string, error) {
 	programID, err := getProgramID()
 	if err != nil {
 		return "", err
 	}
-	settlerKey, err := getSettlerKeypair()
+	creatorKey, err := getUserSolanaPrivateKey(creatorEmail)
+	if err != nil {
+		return "", err
+	}
+	feePayerKey, err := getFeePayerSolanaPrivateKey()
 	if err != nil {
 		return "", err
 	}
@@ -460,7 +486,35 @@ func cancelVSEventOnchain(eventID string) (string, error) {
 	writeString(buf, &o, eventID)
 	ix := solana.NewInstruction(programID, solana.AccountMetaSlice{
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
-		{PublicKey: settlerKey.PublicKey(), IsSigner: true, IsWritable: false},
+		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{settlerKey}, settlerKey.PublicKey())
+	return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+}
+
+func getUserSolanaPrivateKey(email string) (solana.PrivateKey, error) {
+	wallet, err := db.GetWalletByEmail(context.Background(), email)
+	if err != nil {
+		return nil, fmt.Errorf("wallet lookup failed for %s: %w", email, err)
+	}
+	dec, err := services.Decrypt(wallet.SolPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt sol private key for %s: %w", email, err)
+	}
+	w, err := solana.WalletFromPrivateKeyBase58(dec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse sol private key for %s: %w", email, err)
+	}
+	return w.PrivateKey, nil
+}
+
+func getFeePayerSolanaPrivateKey() (solana.PrivateKey, error) {
+	secret := os.Getenv("VANT_FEE_PAYER_SOLANA")
+	if secret == "" {
+		return nil, fmt.Errorf("VANT_FEE_PAYER_SOLANA not set")
+	}
+	w, err := solana.WalletFromPrivateKeyBase58(secret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse VANT_FEE_PAYER_SOLANA: %w", err)
+	}
+	return w.PrivateKey, nil
 }
