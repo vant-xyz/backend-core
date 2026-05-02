@@ -95,13 +95,11 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		tx, err := createVSEventOnchain(evID, input)
 		if err != nil {
 			log.Printf("[VS] create onchain failed for %s: %v", evID, err)
-			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CREATE_FAILED"})
+			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CREATE_FAILED")
 			return
 		}
-		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{
-			"creation_tx_hash": tx,
-			"chain_state":      "CHAIN_CREATED",
-		})
+		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"creation_tx_hash": tx})
+		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CREATED")
 	}(event.ID)
 
 	fresh, _ := db.GetVSEventByID(ctx, event.ID)
@@ -153,10 +151,10 @@ func JoinVSEvent(ctx context.Context, eventID, userEmail string) (*models.VSEven
 	go func(evID, email string) {
 		if _, err := joinVSEventOnchain(evID, email); err != nil {
 			log.Printf("[VS] join onchain failed: event=%s user=%s err=%v", evID, email, err)
-			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_JOIN_FAILED"})
+			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOIN_FAILED")
 			return
 		}
-		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_JOINED"})
+		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOINED")
 	}(event.ID, userEmail)
 
 	return db.GetVSEventByID(ctx, event.ID)
@@ -211,20 +209,17 @@ func ConfirmVSEventOutcome(ctx context.Context, eventID, userEmail string, outco
 				_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_RESOLVE_FAILED"})
 				return
 			}
-			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{
-				"settlement_tx_hash": tx,
-				"chain_state":        "CHAIN_RESOLVED",
-			})
+			_ = db.UpdateVSEventChainResolved(context.Background(), evID, tx)
 		}(event.ID, models.VSOutcome(finalOutcome))
 	} else {
 		_ = db.UpdateVSEventFields(ctx, event.ID, map[string]interface{}{"chain_state": "PENDING_CHAIN_CONFIRM"})
 		go func(evID, email string, out models.VSOutcome) {
 			if _, err := confirmVSEventOnchain(evID, email, out); err != nil {
 				log.Printf("[VS] confirm onchain failed for %s: %v", evID, err)
-				_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CONFIRM_FAILED"})
+				_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRM_FAILED")
 				return
 			}
-			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CONFIRMED"})
+			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRMED")
 		}(event.ID, userEmail, outcome)
 	}
 
@@ -279,7 +274,7 @@ func CancelVSEvent(ctx context.Context, eventID, requester string) (*models.VSEv
 			_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CANCEL_FAILED"})
 			return
 		}
-		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_CANCELLED"})
+		_ = db.UpdateVSEventChainCancelled(context.Background(), evID)
 	}(event.ID)
 	return db.GetVSEventByID(ctx, event.ID)
 }

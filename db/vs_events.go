@@ -23,6 +23,34 @@ func SaveVSEvent(ctx context.Context, e *models.VSEvent) error {
 	return err
 }
 
+func UpdateVSEventChainStateIfNotTerminal(ctx context.Context, eventID, newState string) error {
+	_, err := Pool.Exec(ctx, `
+		UPDATE vs_events
+		SET chain_state = $1, updated_at = $2
+		WHERE id = $3
+		  AND chain_state NOT IN ('CHAIN_RESOLVED','CHAIN_CANCELLED','PENDING_CHAIN_RESOLVE','PENDING_CHAIN_CANCEL')
+	`, newState, time.Now().UTC(), eventID)
+	return err
+}
+
+func UpdateVSEventChainResolved(ctx context.Context, eventID, txHash string) error {
+	_, err := Pool.Exec(ctx, `
+		UPDATE vs_events
+		SET settlement_tx_hash = $1, chain_state = 'CHAIN_RESOLVED', updated_at = $2
+		WHERE id = $3
+	`, txHash, time.Now().UTC(), eventID)
+	return err
+}
+
+func UpdateVSEventChainCancelled(ctx context.Context, eventID string) error {
+	_, err := Pool.Exec(ctx, `
+		UPDATE vs_events
+		SET chain_state = 'CHAIN_CANCELLED', updated_at = $1
+		WHERE id = $2
+	`, time.Now().UTC(), eventID)
+	return err
+}
+
 func SaveVSEventParticipant(ctx context.Context, p *models.VSEventParticipant) error {
 	_, err := Pool.Exec(ctx, `
 		INSERT INTO vs_event_participants (id,vs_event_id,user_email,joined_at,locked_amount,confirmation,confirmed_at)
