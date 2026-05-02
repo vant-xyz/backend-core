@@ -695,6 +695,78 @@ components:
         OutcomeDescription:
           type: string
 
+    VSEventParticipant:
+      type: object
+      properties:
+        id: { type: string }
+        vs_event_id: { type: string }
+        user_email: { type: string, format: email }
+        joined_at: { type: string, format: date-time }
+        locked_amount: { type: number, example: 25.0 }
+        confirmation:
+          type: string
+          enum: ["", YES, NO]
+        confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    VSEvent:
+      type: object
+      properties:
+        id: { type: string, example: "VS_A1B2C3D4" }
+        title: { type: string }
+        description: { type: string }
+        creator_email: { type: string, format: email }
+        mode:
+          type: string
+          enum: [mutual, consensus]
+        threshold:
+          type: integer
+          description: Confirmation threshold for consensus mode
+        stake_amount:
+          type: number
+          description: Stake per participant, in USD
+          example: 25
+        participant_target:
+          type: integer
+          example: 2
+        status:
+          type: string
+          enum: [open, active, resolved, cancelled, disputed]
+        outcome:
+          type: string
+          enum: ["", YES, NO]
+        outcome_description:
+          type: string
+        creation_tx_hash:
+          type: string
+        settlement_tx_hash:
+          type: string
+        chain_state:
+          type: string
+          description: Optimistic chain synchronization status
+        join_deadline_utc:
+          type: string
+          format: date-time
+        resolve_deadline_utc:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/VSEventParticipant'
+
     PriceMap:
       type: object
       description: Map of asset ticker to price data
@@ -3137,3 +3209,184 @@ paths:
                           type: string
         '500':
           description: Key not configured or mainnet RPC unavailable
+
+  /vs/events:
+    get:
+      tags: [VS]
+      summary: List VS events
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, active, resolved, cancelled, disputed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: VS events list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  count: { type: integer }
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VSEvent'
+    post:
+      tags: [VS]
+      summary: Create VS event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, mode, stake_amount, participant_target, join_deadline_utc, resolve_deadline_utc]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                mode:
+                  type: string
+                  enum: [mutual, consensus]
+                threshold:
+                  type: integer
+                  description: Required only for consensus mode
+                stake_amount:
+                  type: number
+                  example: 25
+                participant_target:
+                  type: integer
+                  example: 2
+                join_deadline_utc:
+                  type: integer
+                  description: Unix timestamp
+                resolve_deadline_utc:
+                  type: integer
+                  description: Unix timestamp
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event:
+                    $ref: '#/components/schemas/VSEvent'
+        '400':
+          description: Invalid request or insufficient balance
+
+  /vs/events/{id}:
+    get:
+      tags: [VS]
+      summary: Get VS event
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: VS event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event:
+                    $ref: '#/components/schemas/VSEvent'
+        '404':
+          description: Not found
+
+  /vs/events/{id}/join:
+    post:
+      tags: [VS]
+      summary: Join VS event
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Joined
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event:
+                    $ref: '#/components/schemas/VSEvent'
+        '400':
+          description: Event not joinable or insufficient balance
+
+  /vs/events/{id}/confirm:
+    post:
+      tags: [VS]
+      summary: Confirm VS outcome
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome:
+                  type: string
+                  enum: [YES, NO]
+      responses:
+        '200':
+          description: Confirmation accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event:
+                    $ref: '#/components/schemas/VSEvent'
+        '400':
+          description: Invalid state or vote
+
+  /vs/events/{id}/cancel:
+    post:
+      tags: [VS]
+      summary: Cancel VS event (creator only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event:
+                    $ref: '#/components/schemas/VSEvent'
+        '400':
+          description: Invalid state or unauthorized

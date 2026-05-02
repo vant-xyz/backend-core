@@ -157,6 +157,12 @@ func main() {
 		auth.GET("/orders", handlersmarkets.GetUserOrders)
 		auth.GET("/positions", handlersmarkets.GetUserPositions)
 		auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
+		auth.POST("/vs/events", handlers.CreateVSEvent)
+		auth.GET("/vs/events", handlers.ListVSEvents)
+		auth.GET("/vs/events/:id", handlers.GetVSEvent)
+		auth.POST("/vs/events/:id/join", handlers.JoinVSEvent)
+		auth.POST("/vs/events/:id/confirm", handlers.ConfirmVSEvent)
+		auth.POST("/vs/events/:id/cancel", handlers.CancelVSEvent)
 
 		// WebSockets
 		// /ws             → live price feed (BTC, ETH, SOL every 5s)
