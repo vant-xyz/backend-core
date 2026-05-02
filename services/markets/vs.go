@@ -208,15 +208,15 @@ func ConfirmVSEventOutcome(ctx context.Context, eventID, userEmail string, outco
 		if err := settleVSEventLedger(ctx, event.ID, models.VSOutcome(finalOutcome)); err != nil {
 			log.Printf("[VS] ledger settle failed for %s: %v", event.ID, err)
 		}
-		go func(evID string, out models.VSOutcome) {
-			tx, err := resolveVSEventOnchain(evID, event.CreatorEmail, out, "Resolved by confirmations")
+		go func(evID, email string, out models.VSOutcome) {
+			tx, err := confirmVSEventOnchain(evID, email, out)
 			if err != nil {
-				log.Printf("[VS] resolve onchain failed for %s: %v", evID, err)
+				log.Printf("[VS] final confirm onchain failed for %s: %v", evID, err)
 				_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_RESOLVE_FAILED"})
 				return
 			}
 			_ = db.UpdateVSEventChainResolved(context.Background(), evID, tx)
-		}(event.ID, models.VSOutcome(finalOutcome))
+		}(event.ID, userEmail, outcome)
 	} else {
 		_ = db.UpdateVSEventFields(ctx, event.ID, map[string]interface{}{"chain_state": "PENDING_CHAIN_CONFIRM"})
 		go func(evID, email string, out models.VSOutcome) {

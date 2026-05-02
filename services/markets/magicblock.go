@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"time"
@@ -18,14 +19,14 @@ import (
 const privatePaymentsBase = "https://payments.magicblock.app"
 
 type privatePaymentReq struct {
-	From          string `json:"from"`
-	To            string `json:"to"`
-	Mint          string `json:"mint"`
-	Amount        uint64 `json:"amount"`
-	FromBalance   string `json:"fromBalance"`
-	ToBalance     string `json:"toBalance"`
-	Visibility    string `json:"visibility"`
-	Cluster       string `json:"cluster,omitempty"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Mint        string `json:"mint"`
+	Amount      uint64 `json:"amount"`
+	FromBalance string `json:"fromBalance"`
+	ToBalance   string `json:"toBalance"`
+	Visibility  string `json:"visibility"`
+	Cluster     string `json:"cluster,omitempty"`
 }
 
 func getCluster() string {
@@ -50,6 +51,53 @@ func getUSDCMint() string {
 	return "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 }
 
+func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
+	cluster := os.Getenv("SOLANA_CLUSTER")
+	if cluster == "" {
+		cluster = "devnet"
+	}
+	isDevnet := cluster == "devnet" || cluster == "testnet"
+
+	switch asset {
+	case "usdc_sol":
+		if isDevnet {
+			m := os.Getenv("DEVNET_SOL_USDC_MINT")
+			if m == "" {
+				m = getUSDCMint()
+			}
+			return m, 6, nil
+		}
+		m := os.Getenv("MAINNET_SOL_USDC_MINT")
+		if m == "" {
+			return "", 0, fmt.Errorf("MAINNET_SOL_USDC_MINT not set")
+		}
+		return m, 6, nil
+	case "usdt_sol":
+		m := os.Getenv("MAINNET_SOL_USDT_MINT")
+		if m == "" {
+			return "", 0, fmt.Errorf("MAINNET_SOL_USDT_MINT not set")
+		}
+		return m, 6, nil
+	case "usdg_sol":
+		m := os.Getenv("MAINNET_SOL_USDG_MINT")
+		if m == "" {
+			return "", 0, fmt.Errorf("MAINNET_SOL_USDG_MINT not set")
+		}
+		return m, 6, nil
+	case "wsol":
+		m := os.Getenv("DEVNET_SOL_WSOL_MINT")
+		if !isDevnet {
+			m = os.Getenv("MAINNET_SOL_WSOL_MINT")
+		}
+		if m == "" {
+			m = "So11111111111111111111111111111111111111112"
+		}
+		return m, 9, nil
+	default:
+		return "", 0, fmt.Errorf("unsupported private SPL asset: %s", asset)
+	}
+}
+
 func getEphemeralRPCURL() string {
 	if url := os.Getenv("MAGICBLOCK_EPHEMERAL_RPC_URL"); url != "" {
 		return url
@@ -67,10 +115,29 @@ func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float
 }
 
 func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress string, amount uint64) (string, error) {
+	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, getUSDCMint(), amount)
+}
+
+func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, asset string, amount float64) (string, error) {
+	if amount <= 0 {
+		return "", fmt.Errorf("amount must be positive")
+	}
+	mint, decimals, err := getSPLMintAndDecimalsForPrivate(asset)
+	if err != nil {
+		return "", err
+	}
+	baseUnits := uint64(math.Round(amount * math.Pow10(int(decimals))))
+	if baseUnits == 0 {
+		return "", fmt.Errorf("amount too small")
+	}
+	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, mint, baseUnits)
+}
+
+func sendPrivateSPLPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, mint string, amount uint64) (string, error) {
 	reqBody := privatePaymentReq{
 		From:        payerKeypair.PublicKey().String(),
 		To:          recipientAddress,
-		Mint:        getUSDCMint(),
+		Mint:        mint,
 		Amount:      amount,
 		FromBalance: "base",
 		ToBalance:   "base",

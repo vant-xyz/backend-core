@@ -505,6 +505,20 @@ func WithdrawAsset(c *gin.Context) {
 				return
 			}
 			txHash, txErr = services.TransferSol(decPriv, req.DestinationAddress, netAmount)
+		case "usdc_sol", "usdt_sol", "usdg_sol", "wsol":
+			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
+			if err != nil {
+				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)
+				reverse()
+				return
+			}
+			userWallet, err := solana.WalletFromPrivateKeyBase58(decPriv)
+			if err != nil {
+				log.Printf("[WithdrawAsset] key parse failed %s: %v", email, err)
+				reverse()
+				return
+			}
+			txHash, txErr = markets.SendPrivateSPLAssetPayment(context.Background(), userWallet.PrivateKey, req.DestinationAddress, req.Asset, netAmount)
 		case "eth_base", "usdc_base":
 			txHash, txErr = services.TransferBaseAsset(wallet.BasePrivateKey, req.Asset, req.DestinationAddress, netAmount)
 		default:
