@@ -93,21 +93,27 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		return nil, err
 	}
 
-	go func(evID string) {
-		tx, err := createVSEventOnchain(evID, input)
-		if err != nil {
-			log.Printf("[VS] create onchain failed for %s: %v", evID, err)
-			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CREATE_FAILED")
-			return
+	tx, err := createVSEventOnchain(event.ID, input)
+	if err != nil {
+		log.Printf("[VS] create onchain failed for %s: %v", event.ID, err)
+		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), event.ID, "CHAIN_CREATE_FAILED")
+		fresh, _ := db.GetVSEventByID(ctx, event.ID)
+		if fresh != nil {
+			return fresh, nil
 		}
-		if _, err := DelegateMarket(evID); err != nil {
-			log.Printf("[VS] delegate failed for %s: %v", evID, err)
-			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_DELEGATE_FAILED")
-			return
+		return event, nil
+	}
+	if _, err := DelegateMarket(event.ID); err != nil {
+		log.Printf("[VS] delegate failed for %s: %v", event.ID, err)
+		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), event.ID, "CHAIN_DELEGATE_FAILED")
+		fresh, _ := db.GetVSEventByID(ctx, event.ID)
+		if fresh != nil {
+			return fresh, nil
 		}
-		_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"creation_tx_hash": tx})
-		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CREATED")
-	}(event.ID)
+		return event, nil
+	}
+	_ = db.UpdateVSEventFields(context.Background(), event.ID, map[string]interface{}{"creation_tx_hash": tx})
+	_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), event.ID, "CHAIN_CREATED")
 
 	fresh, _ := db.GetVSEventByID(ctx, event.ID)
 	if fresh != nil {
@@ -155,14 +161,16 @@ func JoinVSEvent(ctx context.Context, eventID, userEmail string) (*models.VSEven
 		"chain_state": "PENDING_CHAIN_JOIN",
 	})
 
-	go func(evID, email string) {
-		if _, err := joinVSEventOnchain(evID, email); err != nil {
-			log.Printf("[VS] join onchain failed: event=%s user=%s err=%v", evID, email, err)
-			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOIN_FAILED")
-			return
-		}
-		_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOINED")
-	}(event.ID, userEmail)
+	if isVSChainReadyForWrites(event.ChainState) {
+		go func(evID, email string) {
+			if _, err := joinVSEventOnchain(evID, email); err != nil {
+				log.Printf("[VS] join onchain failed: event=%s user=%s err=%v", evID, email, err)
+				_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOIN_FAILED")
+				return
+			}
+			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_JOINED")
+		}(event.ID, userEmail)
+	}
 
 	return db.GetVSEventByID(ctx, event.ID)
 }
@@ -209,25 +217,29 @@ func ConfirmVSEventOutcome(ctx context.Context, eventID, userEmail string, outco
 		if err := settleVSEventLedger(ctx, event.ID, models.VSOutcome(finalOutcome)); err != nil {
 			log.Printf("[VS] ledger settle failed for %s: %v", event.ID, err)
 		}
-		go func(evID, email string, out models.VSOutcome) {
-			tx, err := confirmVSEventOnchain(evID, email, out)
-			if err != nil {
-				log.Printf("[VS] final confirm onchain failed for %s: %v", evID, err)
-				_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_RESOLVE_FAILED"})
-				return
-			}
-			_ = db.UpdateVSEventChainResolved(context.Background(), evID, tx)
-		}(event.ID, userEmail, outcome)
+		if isVSChainReadyForWrites(event.ChainState) {
+			go func(evID, email string, out models.VSOutcome) {
+				tx, err := confirmVSEventOnchain(evID, email, out)
+				if err != nil {
+					log.Printf("[VS] final confirm onchain failed for %s: %v", evID, err)
+					_ = db.UpdateVSEventFields(context.Background(), evID, map[string]interface{}{"chain_state": "CHAIN_RESOLVE_FAILED"})
+					return
+				}
+				_ = db.UpdateVSEventChainResolved(context.Background(), evID, tx)
+			}(event.ID, userEmail, outcome)
+		}
 	} else {
 		_ = db.UpdateVSEventFields(ctx, event.ID, map[string]interface{}{"chain_state": "PENDING_CHAIN_CONFIRM"})
-		go func(evID, email string, out models.VSOutcome) {
-			if _, err := confirmVSEventOnchain(evID, email, out); err != nil {
-				log.Printf("[VS] confirm onchain failed for %s: %v", evID, err)
-				_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRM_FAILED")
-				return
-			}
-			_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRMED")
-		}(event.ID, userEmail, outcome)
+		if isVSChainReadyForWrites(event.ChainState) {
+			go func(evID, email string, out models.VSOutcome) {
+				if _, err := confirmVSEventOnchain(evID, email, out); err != nil {
+					log.Printf("[VS] confirm onchain failed for %s: %v", evID, err)
+					_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRM_FAILED")
+					return
+				}
+				_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), evID, "CHAIN_CONFIRMED")
+			}(event.ID, userEmail, outcome)
+		}
 	}
 
 	return db.GetVSEventByID(ctx, event.ID)
@@ -497,11 +509,16 @@ func sendVSInstructionPreferEphemeral(
 	signers []solana.PrivateKey,
 	feePayer solana.PublicKey,
 ) (string, error) {
-	sig, err := sendToEphemeral([]solana.Instruction{ix}, signers, feePayer)
-	if err == nil {
-		return sig, nil
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		sig, err := sendToEphemeral([]solana.Instruction{ix}, signers, feePayer)
+		if err == nil {
+			return sig, nil
+		}
+		lastErr = err
+		time.Sleep(time.Duration(300*(i+1)) * time.Millisecond)
 	}
-	errText := err.Error()
+	errText := lastErr.Error()
 	if strings.Contains(errText, "InvalidWritableAccount") ||
 		strings.Contains(errText, "Custom:4") ||
 		strings.Contains(errText, "Custom:18") ||
@@ -509,7 +526,16 @@ func sendVSInstructionPreferEphemeral(
 		strings.Contains(errText, "MarketNotStarted") {
 		return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, signers, feePayer)
 	}
-	return "", err
+	return "", lastErr
+}
+
+func isVSChainReadyForWrites(chainState string) bool {
+	switch chainState {
+	case "CHAIN_CREATED", "CHAIN_JOINED", "CHAIN_CONFIRMED":
+		return true
+	default:
+		return false
+	}
 }
 
 func getUserSolanaPrivateKey(email string) (solana.PrivateKey, error) {
