@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
@@ -393,7 +394,7 @@ func joinVSEventOnchain(eventID, userEmail string) (string, error) {
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendVSInstructionPreferEphemeral(ix, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func confirmVSEventOnchain(eventID, userEmail string, outcome models.VSOutcome) (string, error) {
@@ -426,7 +427,7 @@ func confirmVSEventOnchain(eventID, userEmail string, outcome models.VSOutcome) 
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: userKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendVSInstructionPreferEphemeral(ix, []solana.PrivateKey{userKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func resolveVSEventOnchain(eventID, creatorEmail string, outcome models.VSOutcome, desc string) (string, error) {
@@ -460,7 +461,7 @@ func resolveVSEventOnchain(eventID, creatorEmail string, outcome models.VSOutcom
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendVSInstructionPreferEphemeral(ix, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
 }
 
 func cancelVSEventOnchain(eventID, creatorEmail string) (string, error) {
@@ -488,7 +489,27 @@ func cancelVSEventOnchain(eventID, creatorEmail string) (string, error) {
 		{PublicKey: marketPDA, IsSigner: false, IsWritable: true},
 		{PublicKey: creatorKey.PublicKey(), IsSigner: true, IsWritable: false},
 	}, buf)
-	return sendToEphemeral([]solana.Instruction{ix}, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+	return sendVSInstructionPreferEphemeral(ix, []solana.PrivateKey{creatorKey, feePayerKey}, feePayerKey.PublicKey())
+}
+
+func sendVSInstructionPreferEphemeral(
+	ix solana.Instruction,
+	signers []solana.PrivateKey,
+	feePayer solana.PublicKey,
+) (string, error) {
+	sig, err := sendToEphemeral([]solana.Instruction{ix}, signers, feePayer)
+	if err == nil {
+		return sig, nil
+	}
+	errText := err.Error()
+	if strings.Contains(errText, "InvalidWritableAccount") ||
+		strings.Contains(errText, "Custom:4") ||
+		strings.Contains(errText, "Custom:18") ||
+		strings.Contains(errText, "UninitializedAccount") ||
+		strings.Contains(errText, "MarketNotStarted") {
+		return sendAndConfirm(getFallbackRPCURLs(), []solana.Instruction{ix}, signers, feePayer)
+	}
+	return "", err
 }
 
 func getUserSolanaPrivateKey(email string) (solana.PrivateKey, error) {
