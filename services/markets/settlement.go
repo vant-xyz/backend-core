@@ -8,6 +8,7 @@ import (
 
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
+	"github.com/vant-xyz/backend-code/services"
 	"github.com/vant-xyz/backend-code/utils"
 )
 
@@ -83,7 +84,60 @@ func ProcessMarketSettlement(ctx context.Context, marketID string, outcome model
 	log.Printf("[Settlement] Complete: market=%s outcome=%s winners=%d losers=%d payout=%.2f refunds=%d",
 		marketID, outcome, winCount, loseCount, totalPayout, refundedCount)
 
+	go dispatchResolutionEmails(market, outcome, payouts)
+
 	return result, nil
+}
+
+func dispatchResolutionEmails(market *models.Market, outcome models.MarketOutcome, payouts []Payout) {
+	if len(payouts) == 0 {
+		return
+	}
+
+	req := services.SendMarketResolvedBatchRequest{}
+	req.Market.Title = market.Title
+	req.Market.BannerImage = market.MarketImageBanner
+	req.Market.AvatarImage = market.MarketImageSmall
+	req.Market.Outcome = string(outcome)
+
+	for _, p := range payouts {
+		// Calculate stats
+		// We need to fetch the original position to get the stake
+		pos, err := db.GetPositionByID(context.Background(), p.PositionID)
+		if err != nil {
+			continue
+		}
+
+		stake := pos.Shares * pos.AvgEntryPrice
+		pnl := p.PayoutAmount - stake
+		multiplier := 0.0
+		if stake > 0 {
+			multiplier = p.PayoutAmount / stake
+		}
+
+		req.Participants = append(req.Participants, services.MarketResolvedParticipant{
+			Email:      p.UserEmail,
+			Won:        p.PayoutAmount > 0,
+			Stake:      stake,
+			Payout:     p.PayoutAmount,
+			PnL:        pnl,
+			Multiplier: multiplier,
+		})
+
+		// Batching by 50 to avoid huge request bodies
+		if len(req.Participants) >= 50 {
+			if err := services.SendMarketResolvedBatchEmail(req); err != nil {
+				log.Printf("[Settlement] Failed to dispatch email batch: %v", err)
+			}
+			req.Participants = []services.MarketResolvedParticipant{}
+		}
+	}
+
+	if len(req.Participants) > 0 {
+		if err := services.SendMarketResolvedBatchEmail(req); err != nil {
+			log.Printf("[Settlement] Failed to dispatch final email batch: %v", err)
+		}
+	}
 }
 
 func CalculatePayouts(ctx context.Context, marketID string, outcome models.MarketOutcome, quoteCurrency string) ([]Payout, error) {

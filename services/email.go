@@ -55,6 +55,79 @@ type EmailResponse struct {
 	Message string `json:"message"`
 }
 
+type SendAdminReminderRequest struct {
+	MarketID    string `json:"marketId"`
+	MarketTitle string `json:"marketTitle"`
+}
+
+type SendMarketResolvedBatchRequest struct {
+	Market struct {
+		Title       string `json:"title"`
+		BannerImage string `json:"bannerImage"`
+		AvatarImage string `json:"avatarImage"`
+		Outcome     string `json:"outcome"`
+	} `json:"market"`
+	Participants []MarketResolvedParticipant `json:"participants"`
+}
+
+type MarketResolvedParticipant struct {
+	Email      string  `json:"email"`
+	Won        bool    `json:"won"`
+	Stake      float64 `json:"stake"`
+	Payout     float64 `json:"payout"`
+	PnL        float64 `json:"pnl"`
+	Multiplier float64 `json:"multiplier"`
+}
+
+func SendAdminReminderEmail(marketID, marketTitle string) error {
+	reqBody := SendAdminReminderRequest{
+		MarketID:    marketID,
+		MarketTitle: marketTitle,
+	}
+	return callProtectedVASEndpoint("/email/admin-reminder", reqBody)
+}
+
+func SendMarketResolvedBatchEmail(req SendMarketResolvedBatchRequest) error {
+	return callProtectedVASEndpoint("/email/market-resolved-batch", req)
+}
+
+func callProtectedVASEndpoint(path string, body interface{}) error {
+	baseURL := os.Getenv("VANT_AUXILIARY_SERVICE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:3000"
+	}
+	adminKey := os.Getenv("ADMIN_API_KEY")
+
+	url := fmt.Sprintf("%s%s", baseURL, path)
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyJSON))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Key", adminKey)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result EmailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("VAS error: %s", result.Message)
+	}
+	return nil
+}
+
 func SendWaitlistEmail(toEmail, referralCode string) error {
 	log.Printf("[VAS] Sending waitlist email to %s", toEmail)
 

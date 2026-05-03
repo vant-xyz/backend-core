@@ -10,6 +10,7 @@ import (
 
 	"github.com/vant-xyz/backend-code/db"
 	"github.com/vant-xyz/backend-code/models"
+	"github.com/vant-xyz/backend-code/services"
 )
 
 const PRODUCTION = false
@@ -211,6 +212,14 @@ func settleWithRetry(loopID, marketID, asset string) {
 			cappmLog.Printf("[%s] Failed to load market %s (attempt %d): %v",
 				loopID, marketID, attempt, err)
 			continue
+		}
+
+		if attempt == 1 {
+			go func(mID, title string) {
+				if err := services.SendAdminReminderEmail(mID, title); err != nil {
+					cappmLog.Printf("[%s] Failed to send admin reminder: %v", loopID, err)
+				}
+			}(market.ID, market.Title)
 		}
 
 		if market.Status == models.MarketStatusResolved {

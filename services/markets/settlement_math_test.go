@@ -216,3 +216,57 @@ func abs(x float64) float64 {
 	}
 	return x
 }
+
+// ── resolution email stats ───────────────────────────────────────────────────
+
+func TestResolutionStats_Win(t *testing.T) {
+	// User bought 100 shares at 0.40 (Stake = $40). Market resolved YES.
+	// Payout = $100. PnL = +$60. Multiplier = 2.5x.
+	stake := 100.0 * 0.40
+	payout := 100.0 * 1.0
+	pnl := payout - stake
+	multiplier := payout / stake
+
+	if stake != 40.0 {
+		t.Errorf("stake = %.2f, want 40.0", stake)
+	}
+	if pnl != 60.0 {
+		t.Errorf("pnl = %.2f, want 60.0", pnl)
+	}
+	if multiplier != 2.5 {
+		t.Errorf("multiplier = %.2f, want 2.5", multiplier)
+	}
+}
+
+func TestResolutionStats_Loss(t *testing.T) {
+	// User bought 100 shares at 0.60 (Stake = $60). Market resolved NO.
+	// Payout = $0. PnL = -$60. Multiplier = 0.0x.
+	stake := 100.0 * 0.60
+	payout := 0.0
+	pnl := payout - stake
+	multiplier := 0.0
+	if stake > 0 {
+		multiplier = payout / stake
+	}
+
+	if pnl != -60.0 {
+		t.Errorf("pnl = %.2f, want -60.0", pnl)
+	}
+	if multiplier != 0.0 {
+		t.Errorf("multiplier = %.2f, want 0.0", multiplier)
+	}
+}
+
+func TestResolutionStats_ZeroStake(t *testing.T) {
+	// Corner case: Zero stake should not panic and should have 0 multiplier.
+	stake := 0.0
+	payout := 0.0
+	multiplier := 0.0
+	if stake > 0 {
+		multiplier = payout / stake
+	}
+
+	if multiplier != 0.0 {
+		t.Errorf("multiplier for zero stake = %.2f, want 0.0", multiplier)
+	}
+}
