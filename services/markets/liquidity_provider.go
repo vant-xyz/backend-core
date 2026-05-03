@@ -18,6 +18,7 @@ const (
 	spreadBlowoutThreshold = 0.25
 	isMainnet              = false
 	devBotPairsPerCycle    = 6
+	maxBotSharesPerSide    = 2500.0
 )
 
 var takerBotPool []string
@@ -342,6 +343,20 @@ func randomTrade(ctx context.Context, market *models.Market) {
 	qty := math.Round(5 + rand.Float64()*45)
 	bot := takerBotPool[rand.IntN(len(takerBotPool))]
 
+	pos, err := db.GetUserPositionForMarketSide(ctx, bot, market.ID, side, true)
+	if err == nil && pos != nil && pos.Shares >= maxBotSharesPerSide {
+		if rand.Float64() < 0.3 {
+			sellQty := pos.Shares * 0.5
+			log.Printf("[RandomBot] limit reached bot=%s side=%s, selling %.2f shares", bot, side, sellQty)
+			_, _, _ = ClosePosition(ctx, ClosePositionInput{
+				PositionID: pos.ID,
+				UserEmail:  bot,
+				Shares:     sellQty,
+			})
+		}
+		return
+	}
+
 	if _, err := PlaceOrder(ctx, PlaceOrderInput{
 		UserEmail: bot,
 		MarketID:  market.ID,
@@ -389,6 +404,21 @@ func intelligentTrade(ctx context.Context, market *models.Market) {
 	}
 
 	bot := takerBotPool[rand.IntN(len(takerBotPool))]
+
+	pos, err := db.GetUserPositionForMarketSide(ctx, bot, market.ID, side, true)
+	if err == nil && pos != nil && pos.Shares >= maxBotSharesPerSide {
+		if rand.Float64() < 0.3 {
+			sellQty := pos.Shares * 0.5
+			log.Printf("[IntelligentBot] limit reached bot=%s side=%s, selling %.2f shares", bot, side, sellQty)
+			_, _, _ = ClosePosition(ctx, ClosePositionInput{
+				PositionID: pos.ID,
+				UserEmail:  bot,
+				Shares:     sellQty,
+			})
+		}
+		return
+	}
+
 	if _, err := PlaceOrder(ctx, PlaceOrderInput{
 		UserEmail: bot,
 		MarketID:  market.ID,
