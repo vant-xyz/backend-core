@@ -179,7 +179,7 @@ func SyncBalance(c *gin.Context) {
 		return
 	}
 
-	usdc, usdt, usdg, splErr := services.GetAllSPLBalances(wallet.SolPublicKey)
+	usdc, usdt, usdg, pusd, splErr := services.GetAllSPLBalances(wallet.SolPublicKey)
 	if splErr != nil {
 		// SPL errors are non-fatal — SOL sync already succeeded.
 		// Log the error and continue; user gets SOL updated + whatever SPL succeeded.
@@ -204,8 +204,14 @@ func SyncBalance(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[SyncBalance] Sync complete for %s — SOL: %f, USDC: %f, USDT: %f, USDG: %f",
-		email, onChainSol, usdc, usdt, usdg)
+	if pusd > 0 {
+		if err = db.SetBalance(c.Request.Context(), email.(string), "pusd_sol", pusd); err != nil {
+			log.Printf("[SyncBalance] Failed to update PUSD balance: %v", err)
+		}
+	}
+
+	log.Printf("[SyncBalance] Sync complete for %s — SOL: %f, USDC: %f, USDT: %f, USDG: %f, PUSD: %f",
+		email, onChainSol, usdc, usdt, usdg, pusd)
 
 	balance, _ := db.GetBalanceByEmail(c.Request.Context(), email.(string))
 	realNaira, demoNaira := services.ResolveNairaBalances(balance)
@@ -395,6 +401,8 @@ func assetBalance(b *models.Balance, asset string) float64 {
 		return b.USDTSol
 	case "usdg_sol":
 		return b.USDGSol
+	case "pusd_sol":
+		return b.Pusdsol
 	case "eth_base":
 		return b.ETHBase
 	case "usdc_base":
@@ -460,7 +468,7 @@ func WithdrawAsset(c *gin.Context) {
 		}
 		currentBalance = assetBalance(balance, req.Asset)
 		if currentBalance == 0 && assetBalance(balance, req.Asset) == 0 {
-			supported := map[string]bool{"sol": true, "usdc_sol": true, "usdt_sol": true, "usdg_sol": true, "eth_base": true, "usdc_base": true}
+			supported := map[string]bool{"sol": true, "usdc_sol": true, "usdt_sol": true, "usdg_sol": true, "pusd_sol": true, "eth_base": true, "usdc_base": true}
 			if !supported[req.Asset] {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "Unsupported asset"})
 				return
@@ -505,7 +513,7 @@ func WithdrawAsset(c *gin.Context) {
 				return
 			}
 			txHash, txErr = services.TransferSol(decPriv, req.DestinationAddress, netAmount)
-		case "usdc_sol", "usdt_sol", "usdg_sol", "wsol":
+		case "usdc_sol", "usdt_sol", "usdg_sol", "pusd_sol", "wsol":
 			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
 			if err != nil {
 				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)

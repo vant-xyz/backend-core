@@ -111,7 +111,7 @@ func GetSPLBalance(walletPubKey, mintPubKey, rpcURL, tokenName string) (float64,
 	return balance, nil
 }
 
-func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error) {
+func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg, pusd float64, err error) {
 	log.Printf("[SPL] GetAllSPLBalances for wallet %s", walletPubKey)
 
 	devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
@@ -120,6 +120,7 @@ func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error
 	usdcMint := os.Getenv("DEVNET_SOL_USDC_MINT")
 	usdtMint := os.Getenv("MAINNET_SOL_USDT_MINT")
 	usdgMint := os.Getenv("MAINNET_SOL_USDG_MINT")
+	pusdMint := "CZzgUBvxaMLwMhVSLgqJn3npmxoTo6nzMNQPAnwtHF3s"
 
 	var fetchErr error
 
@@ -160,8 +161,21 @@ func GetAllSPLBalances(walletPubKey string) (usdc, usdt, usdg float64, err error
 		log.Printf("[SPL] Skipping USDG: mint=%q mainnetRPC=%q", usdgMint, mainnetRPC)
 	}
 
-	log.Printf("[SPL] Final balances — USDC: %f, USDT: %f, USDG: %f", usdc, usdt, usdg)
-	return usdc, usdt, usdg, err
+	if mainnetRPC != "" {
+		pusd, fetchErr = GetSPLBalance(walletPubKey, pusdMint, mainnetRPC, "PUSD")
+		if fetchErr != nil {
+			log.Printf("[SPL] PUSD fetch error: %v", fetchErr)
+			if err == nil {
+				err = fetchErr
+			}
+			pusd = 0
+		}
+	} else {
+		log.Printf("[SPL] Skipping PUSD: mainnetRPC not set")
+	}
+
+	log.Printf("[SPL] Final balances — USDC: %f, USDT: %f, USDG: %f, PUSD: %f", usdc, usdt, usdg, pusd)
+	return
 }
 
 func GetWSOLBalances(walletPubKey string) (devnetWSOL, mainnetWSOL float64, err error) {

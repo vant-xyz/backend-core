@@ -9,10 +9,12 @@ type Balance struct {
 	USDCBase       float64 `json:"usdc_base" firestore:"usdc_base"`
 	USDTSol        float64 `json:"usdt_sol" firestore:"usdt_sol"`
 	USDGSol        float64 `json:"usdg_sol" firestore:"usdg_sol"`
+	Pusdsol        float64 `json:"pusd_sol" firestore:"pusd_sol"`
 	Sol            float64 `json:"sol" firestore:"sol"`
 	ETHBase        float64 `json:"eth_base" firestore:"eth_base"`
 	Naira          float64 `json:"naira" firestore:"naira"`
 	DemoUSDCSol    float64 `json:"demo_usdc_sol" firestore:"demo_usdc_sol"`
+	DemoPusdsol    float64 `json:"demo_pusd_sol" firestore:"demo_pusd_sol"`
 	DemoSol        float64 `json:"demo_sol" firestore:"demo_sol"`
 	DemoNaira      float64 `json:"demo_naira" firestore:"demo_naira"`
 	VNaira         float64 `json:"vusd" firestore:"vnaira"`

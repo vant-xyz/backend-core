@@ -197,6 +197,8 @@ components:
           type: number
         usdg_sol:
           type: number
+        pusd_sol:
+          type: number
         sol:
           type: number
           description: Real SOL balance
@@ -1443,6 +1445,7 @@ paths:
         - `usdc_sol` — USDC on Solana
         - `usdt_sol` — USDT on Solana
         - `usdg_sol` — USDG on Solana
+        - `pusd_sol` — Palm USD on Solana
         - `wsol` — Wrapped SOL (SPL token, devnet or mainnet based on cluster)
         - `eth_base` — ETH on Base
         - `usdc_base` — USDC on Base
@@ -1460,8 +1463,8 @@ paths:
               properties:
                 asset:
                   type: string
-                  enum: [sol, usdc_sol, usdt_sol, usdg_sol, wsol, eth_base, usdc_base]
-                  example: "usdc_sol"
+                  enum: [sol, usdc_sol, usdt_sol, usdg_sol, pusd_sol, wsol, eth_base, usdc_base]
+                  example: "pusd_sol"
                 amount:
                   type: number
                   description: Gross amount to withdraw (fee deducted from this)

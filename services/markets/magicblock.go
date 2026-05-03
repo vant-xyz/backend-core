@@ -84,6 +84,8 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 			return "", 0, fmt.Errorf("MAINNET_SOL_USDG_MINT not set")
 		}
 		return m, 6, nil
+	case "pusd_sol":
+		return "CZzgUBvxaMLwMhVSLgqJn3npmxoTo6nzMNQPAnwtHF3s", 6, nil
 	case "wsol":
 		m := os.Getenv("DEVNET_SOL_WSOL_MINT")
 		if !isDevnet {
