@@ -214,11 +214,9 @@ func settleWithRetry(loopID, marketID, asset string) {
 			continue
 		}
 
-		if attempt == 1 {
+		if attempt == 5 {
 			go func(mID, title string) {
-				if err := services.SendAdminReminderEmail(mID, title); err != nil {
-					cappmLog.Printf("[%s] Failed to send admin reminder: %v", loopID, err)
-				}
+				_ = services.SendAdminReminderEmail(mID, "[STUCK] "+title)
 			}(market.ID, market.Title)
 		}
 

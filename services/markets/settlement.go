@@ -96,9 +96,16 @@ func dispatchResolutionEmails(market *models.Market, outcome models.MarketOutcom
 
 	req := services.SendMarketResolvedBatchRequest{}
 	req.Market.Title = market.Title
-	req.Market.BannerImage = market.MarketImageBanner
-	req.Market.AvatarImage = market.MarketImageSmall
 	req.Market.Outcome = string(outcome)
+
+	// Correctly map images based on market type
+	if market.MarketType == models.MarketTypeCAPPM {
+		req.Market.AvatarImage = market.AssetImage
+		req.Market.BannerImage = "" // CAPPMs don't have banners
+	} else {
+		req.Market.AvatarImage = market.MarketImageSmall
+		req.Market.BannerImage = market.MarketImageBanner
+	}
 
 	for _, p := range payouts {
 		// Calculate stats

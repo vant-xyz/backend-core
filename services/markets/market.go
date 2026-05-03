@@ -179,9 +179,21 @@ func CreateGEM(ctx context.Context, input CreateGEMInput) (*models.Market, error
 	}
 
 	StartLiquidityProvider(market)
+	spawnGEMReminder(market)
 
 	log.Printf("[Markets] CreateGEM complete: id=%s pda=%s tx=%s", marketID, marketPDA, txHash)
 	return market, nil
+}
+
+func spawnGEMReminder(market *models.Market) {
+	go func() {
+		delay := time.Until(market.EndTimeUTC)
+		if delay < 0 {
+			delay = 0
+		}
+		time.Sleep(delay)
+		_ = services.SendAdminReminderEmail(market.ID, market.Title)
+	}()
 }
 
 func CreateCAPPMFromAdmin(ctx context.Context, input CreateCAPPMFromAdminInput) (*models.Market, error) {
