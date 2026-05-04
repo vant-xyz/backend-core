@@ -201,6 +201,7 @@ func main() {
 		admin.GET("/users/:email", handlers.GetAdminUser)
 		admin.POST("/fee-wallet/dump-usdc", handlers.DumpFeeWalletToUSDC)
 		admin.POST("/untether-reserve/:wallet_type", handlers.UntetherReserve)
+		admin.GET("/reserve-wallets/balances", handlers.GetReserveWalletBalances)
 	}
 
 	port := os.Getenv("PORT")

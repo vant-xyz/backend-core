@@ -597,3 +597,12 @@ func UntetherReserve(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "result": result})
 }
+
+func GetReserveWalletBalances(c *gin.Context) {
+	result, err := marketsvc.GetReserveWalletBalances(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch reserve wallet balances: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "result": result})
+}

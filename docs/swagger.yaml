@@ -3276,6 +3276,52 @@ paths:
         '500':
           description: Mainnet/env/key/swap failure
 
+  /admin/reserve-wallets/balances:
+    get:
+      tags: [Admin]
+      summary: Fetch mainnet reserve wallet balances for fee and MAS wallets
+      description: |
+        Returns current mainnet balances for the fee wallet and MAS wallet
+        across tracked tokens (SOL, USDC, USDT, USDG, PUSD, ETH).
+      security:
+        - adminKey: []
+      responses:
+        '200':
+          description: Reserve wallet balances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  result:
+                    type: object
+                    properties:
+                      fee:
+                        type: object
+                        properties:
+                          wallet: { type: string }
+                          tokens:
+                            type: object
+                            additionalProperties: { type: number }
+                      fee_base:
+                        type: object
+                        properties:
+                          wallet: { type: string }
+                          tokens:
+                            type: object
+                            additionalProperties: { type: number }
+                      mas:
+                        type: object
+                        properties:
+                          wallet: { type: string }
+                          tokens:
+                            type: object
+                            additionalProperties: { type: number }
+        '500':
+          description: Mainnet RPC/env/key failure
+
   /vs/events:
     get:
       tags: [VS]
