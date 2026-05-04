@@ -720,6 +720,9 @@ components:
         title: { type: string }
         description: { type: string }
         creator_email: { type: string, format: email }
+        is_demo:
+          type: boolean
+          description: true for demo VS event, false for real
         mode:
           type: string
           enum: [mutual, consensus]
@@ -3315,6 +3318,9 @@ paths:
               properties:
                 title: { type: string }
                 description: { type: string }
+                is_demo:
+                  type: boolean
+                  default: false
                 mode:
                   type: string
                   enum: [mutual, consensus]

@@ -63,3 +63,12 @@ func TestWriteI32_LittleEndian(t *testing.T) {
 		t.Fatalf("unexpected value: got=%x", got)
 	}
 }
+
+func TestVSQuoteCurrency(t *testing.T) {
+	if got := vsQuoteCurrency(false); got != "USD" {
+		t.Fatalf("expected USD for real mode, got %s", got)
+	}
+	if got := vsQuoteCurrency(true); got != "USD_DEMO" {
+		t.Fatalf("expected USD_DEMO for demo mode, got %s", got)
+	}
+}

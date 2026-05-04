@@ -13,7 +13,8 @@ import (
 func GetBalanceByEmail(ctx context.Context, email string) (*models.Balance, error) {
 	row := Pool.QueryRow(ctx, `
 		SELECT id, email, usdc_sol, usdc_base, usdt_sol, usdg_sol, sol, eth_base,
-		       naira, demo_usdc_sol, demo_sol, demo_naira, vnaira, locked_balance
+		       naira, demo_usdc_sol, demo_sol, demo_naira, vnaira,
+		       locked_balance, locked_balance_real, locked_balance_demo
 		FROM balances WHERE email = $1
 	`, email)
 
@@ -21,13 +22,14 @@ func GetBalanceByEmail(ctx context.Context, email string) (*models.Balance, erro
 	if err := row.Scan(
 		&b.ID, &b.Email, &b.USDCSol, &b.USDCBase, &b.USDTSol, &b.USDGSol,
 		&b.Sol, &b.ETHBase, &b.Naira, &b.DemoUSDCSol, &b.DemoSol,
-		&b.DemoNaira, &b.VNaira, &b.LockedBalance,
+		&b.DemoNaira, &b.VNaira, &b.LockedBalance, &b.LockedReal, &b.LockedDemo,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("balance not found for %s", email)
 		}
 		return nil, fmt.Errorf("failed to get balance for %s: %w", email, err)
 	}
+	b.LockedBalance = b.LockedReal + b.LockedDemo
 	return &b, nil
 }
 
@@ -83,7 +85,8 @@ func runBalanceTxOnce(ctx context.Context, userEmail string, mutatorFn func(*mod
 
 	row := tx.QueryRow(ctx, `
 		SELECT id, email, usdc_sol, usdc_base, usdt_sol, usdg_sol, sol, eth_base,
-		       naira, demo_usdc_sol, demo_sol, demo_naira, vnaira, locked_balance
+		       naira, demo_usdc_sol, demo_sol, demo_naira, vnaira,
+		       locked_balance, locked_balance_real, locked_balance_demo
 		FROM balances WHERE email = $1
 		FOR UPDATE
 	`, userEmail)
@@ -92,13 +95,15 @@ func runBalanceTxOnce(ctx context.Context, userEmail string, mutatorFn func(*mod
 	if err := row.Scan(
 		&b.ID, &b.Email, &b.USDCSol, &b.USDCBase, &b.USDTSol, &b.USDGSol,
 		&b.Sol, &b.ETHBase, &b.Naira, &b.DemoUSDCSol, &b.DemoSol,
-		&b.DemoNaira, &b.VNaira, &b.LockedBalance,
+		&b.DemoNaira, &b.VNaira, &b.LockedBalance, &b.LockedReal, &b.LockedDemo,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("balance not found for %s", userEmail)
 		}
 		return fmt.Errorf("failed to read balance for transaction: %w", err)
 	}
+
+	b.LockedBalance = b.LockedReal + b.LockedDemo
 
 	if err := mutatorFn(&b); err != nil {
 		return err
@@ -117,12 +122,14 @@ func runBalanceTxOnce(ctx context.Context, userEmail string, mutatorFn func(*mod
 			demo_sol      = $9,
 			demo_naira    = $10,
 			vnaira        = $11,
-			locked_balance = $12
-		WHERE email = $13
+			locked_balance = $12,
+			locked_balance_real = $13,
+			locked_balance_demo = $14
+		WHERE email = $15
 	`,
 		b.USDCSol, b.USDCBase, b.USDTSol, b.USDGSol,
 		b.Sol, b.ETHBase, b.Naira, b.DemoUSDCSol, b.DemoSol,
-		b.DemoNaira, b.VNaira, b.LockedBalance, userEmail,
+		b.DemoNaira, b.VNaira, b.LockedReal+b.LockedDemo, b.LockedReal, b.LockedDemo, userEmail,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to write balance after mutation: %w", err)
@@ -151,18 +158,20 @@ func isSerializationFailure(err error) bool {
 
 func balanceFieldToColumn(field string) (string, error) {
 	cols := map[string]string{
-		"usdc_sol":       "usdc_sol",
-		"usdc_base":      "usdc_base",
-		"usdt_sol":       "usdt_sol",
-		"usdg_sol":       "usdg_sol",
-		"sol":            "sol",
-		"eth_base":       "eth_base",
-		"naira":          "naira",
-		"demo_usdc_sol":  "demo_usdc_sol",
-		"demo_sol":       "demo_sol",
-		"demo_naira":     "demo_naira",
-		"vnaira":         "vnaira",
-		"locked_balance": "locked_balance",
+		"usdc_sol":            "usdc_sol",
+		"usdc_base":           "usdc_base",
+		"usdt_sol":            "usdt_sol",
+		"usdg_sol":            "usdg_sol",
+		"sol":                 "sol",
+		"eth_base":            "eth_base",
+		"naira":               "naira",
+		"demo_usdc_sol":       "demo_usdc_sol",
+		"demo_sol":            "demo_sol",
+		"demo_naira":          "demo_naira",
+		"vnaira":              "vnaira",
+		"locked_balance":      "locked_balance",
+		"locked_balance_real": "locked_balance_real",
+		"locked_balance_demo": "locked_balance_demo",
 	}
 	col, ok := cols[field]
 	if !ok {

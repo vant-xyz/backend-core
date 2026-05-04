@@ -12,14 +12,14 @@ func SaveVSEvent(ctx context.Context, e *models.VSEvent) error {
 	_, err := Pool.Exec(ctx, `
 		INSERT INTO vs_events (
 			id,title,description,creator_email,mode,threshold,stake_amount,participant_target,
-			status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,
+			status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,is_demo,
 			join_deadline_utc,resolve_deadline_utc,created_at,updated_at,resolved_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
 		)
 	`, e.ID, e.Title, e.Description, e.CreatorEmail, string(e.Mode), e.Threshold, e.StakeAmount,
 		e.ParticipantTarget, string(e.Status), string(e.Outcome), e.OutcomeDescription, e.CreationTxHash,
-		e.SettlementTxHash, e.ChainState, e.JoinDeadlineUTC, e.ResolveDeadlineUTC, e.CreatedAt, e.UpdatedAt, e.ResolvedAt)
+		e.SettlementTxHash, e.ChainState, e.IsDemo, e.JoinDeadlineUTC, e.ResolveDeadlineUTC, e.CreatedAt, e.UpdatedAt, e.ResolvedAt)
 	return err
 }
 
@@ -73,7 +73,7 @@ func SaveVSEventParticipant(ctx context.Context, p *models.VSEventParticipant) e
 func GetVSEventByID(ctx context.Context, id string) (*models.VSEvent, error) {
 	row := Pool.QueryRow(ctx, `
 		SELECT id,title,description,creator_email,mode,threshold,stake_amount,participant_target,
-		status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,
+		status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,is_demo,
 		join_deadline_utc,resolve_deadline_utc,created_at,updated_at,resolved_at
 		FROM vs_events WHERE id=$1
 	`, id)
@@ -81,7 +81,7 @@ func GetVSEventByID(ctx context.Context, id string) (*models.VSEvent, error) {
 	var mode, status, outcome string
 	if err := row.Scan(&e.ID, &e.Title, &e.Description, &e.CreatorEmail, &mode, &e.Threshold, &e.StakeAmount,
 		&e.ParticipantTarget, &status, &outcome, &e.OutcomeDescription, &e.CreationTxHash, &e.SettlementTxHash,
-		&e.ChainState, &e.JoinDeadlineUTC, &e.ResolveDeadlineUTC, &e.CreatedAt, &e.UpdatedAt, &e.ResolvedAt); err != nil {
+		&e.ChainState, &e.IsDemo, &e.JoinDeadlineUTC, &e.ResolveDeadlineUTC, &e.CreatedAt, &e.UpdatedAt, &e.ResolvedAt); err != nil {
 		return nil, err
 	}
 	e.Mode = models.VSMode(mode)
@@ -123,7 +123,7 @@ func ListVSEvents(ctx context.Context, status string, limit int) ([]models.VSEve
 	_ = rows
 	query := `
 		SELECT id,title,description,creator_email,mode,threshold,stake_amount,participant_target,
-		status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,
+		status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,is_demo,
 		join_deadline_utc,resolve_deadline_utc,created_at,updated_at,resolved_at
 		FROM vs_events`
 	args := []interface{}{}
@@ -145,7 +145,7 @@ func ListVSEvents(ctx context.Context, status string, limit int) ([]models.VSEve
 		var mode, st, oc string
 		if err := pgRows.Scan(&e.ID, &e.Title, &e.Description, &e.CreatorEmail, &mode, &e.Threshold, &e.StakeAmount,
 			&e.ParticipantTarget, &st, &oc, &e.OutcomeDescription, &e.CreationTxHash, &e.SettlementTxHash,
-			&e.ChainState, &e.JoinDeadlineUTC, &e.ResolveDeadlineUTC, &e.CreatedAt, &e.UpdatedAt, &e.ResolvedAt); err != nil {
+			&e.ChainState, &e.IsDemo, &e.JoinDeadlineUTC, &e.ResolveDeadlineUTC, &e.CreatedAt, &e.UpdatedAt, &e.ResolvedAt); err != nil {
 			return nil, err
 		}
 		e.Mode = models.VSMode(mode)

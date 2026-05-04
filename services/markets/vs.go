@@ -28,6 +28,7 @@ type CreateVSEventInput struct {
 	Title              string
 	Description        string
 	CreatorEmail       string
+	IsDemo             bool
 	Mode               models.VSMode
 	Threshold          int
 	StakeAmount        float64
@@ -55,7 +56,8 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		return nil, fmt.Errorf("resolve deadline must be after join deadline")
 	}
 
-	if err := services.LockBalance(ctx, input.CreatorEmail, input.StakeAmount, "USD"); err != nil {
+	quoteCurrency := vsQuoteCurrency(input.IsDemo)
+	if err := services.LockBalance(ctx, input.CreatorEmail, input.StakeAmount, quoteCurrency); err != nil {
 		return nil, err
 	}
 
@@ -66,6 +68,7 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		Title:              input.Title,
 		Description:        input.Description,
 		CreatorEmail:       input.CreatorEmail,
+		IsDemo:             input.IsDemo,
 		Mode:               input.Mode,
 		Threshold:          input.Threshold,
 		StakeAmount:        input.StakeAmount,
@@ -78,7 +81,7 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 		UpdatedAt:          now,
 	}
 	if err := db.SaveVSEvent(ctx, event); err != nil {
-		_ = services.UnlockBalance(ctx, input.CreatorEmail, input.StakeAmount, "USD")
+		_ = services.UnlockBalance(ctx, input.CreatorEmail, input.StakeAmount, quoteCurrency)
 		return nil, err
 	}
 
@@ -136,7 +139,8 @@ func JoinVSEvent(ctx context.Context, eventID, userEmail string) (*models.VSEven
 		}
 	}
 
-	if err := services.LockBalance(ctx, userEmail, event.StakeAmount, "USD"); err != nil {
+	quoteCurrency := vsQuoteCurrency(event.IsDemo)
+	if err := services.LockBalance(ctx, userEmail, event.StakeAmount, quoteCurrency); err != nil {
 		return nil, err
 	}
 
@@ -280,7 +284,7 @@ func CancelVSEvent(ctx context.Context, eventID, requester string) (*models.VSEv
 	}
 
 	for _, p := range event.Participants {
-		_ = services.UnlockBalance(ctx, p.UserEmail, p.LockedAmount, "USD")
+		_ = services.UnlockBalance(ctx, p.UserEmail, p.LockedAmount, vsQuoteCurrency(event.IsDemo))
 	}
 
 	_ = db.UpdateVSEventFields(ctx, event.ID, map[string]interface{}{
@@ -309,7 +313,7 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 	}
 
 	for _, p := range parts {
-		if err := services.DeductLockedBalance(ctx, p.UserEmail, p.LockedAmount); err != nil {
+		if err := services.DeductLockedBalanceByCurrency(ctx, p.UserEmail, p.LockedAmount, vsQuoteCurrency(event.IsDemo)); err != nil {
 			return err
 		}
 	}
@@ -324,7 +328,8 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 	if winner == "" {
 		// no clear winner path: refund everyone
 		for _, p := range parts {
-			if err := services.CreditBalance(ctx, p.UserEmail, p.LockedAmount, "USD"); err != nil {
+			err := services.CreditBalance(ctx, p.UserEmail, p.LockedAmount, vsQuoteCurrency(event.IsDemo))
+			if err != nil {
 				return err
 			}
 		}
@@ -332,7 +337,14 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 	}
 
 	pot := float64(len(parts)) * event.StakeAmount
-	return services.CreditBalance(ctx, winner, pot, "USD")
+	return services.CreditBalance(ctx, winner, pot, vsQuoteCurrency(event.IsDemo))
+}
+
+func vsQuoteCurrency(isDemo bool) string {
+	if isDemo {
+		return "USD_DEMO"
+	}
+	return "USD"
 }
 
 func buildVSEventData(evID string, input CreateVSEventInput) []byte {

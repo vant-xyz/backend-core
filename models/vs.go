@@ -31,6 +31,7 @@ type VSEvent struct {
 	Title              string               `json:"title"`
 	Description        string               `json:"description"`
 	CreatorEmail       string               `json:"creator_email"`
+	IsDemo             bool                 `json:"is_demo"`
 	Mode               VSMode               `json:"mode"`
 	Threshold          int                  `json:"threshold"`
 	StakeAmount        float64              `json:"stake_amount"`

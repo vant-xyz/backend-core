@@ -19,4 +19,6 @@ type Balance struct {
 	DemoNaira      float64 `json:"demo_naira" firestore:"demo_naira"`
 	VNaira         float64 `json:"vusd" firestore:"vnaira"`
 	LockedBalance  float64 `json:"locked_balance" firestore:"locked_balance"`
+	LockedReal     float64 `json:"locked_balance_real" firestore:"locked_balance_real"`
+	LockedDemo     float64 `json:"locked_balance_demo" firestore:"locked_balance_demo"`
 }

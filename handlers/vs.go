@@ -17,6 +17,7 @@ func CreateVSEvent(c *gin.Context) {
 		Title              string  `json:"title" binding:"required"`
 		Description        string  `json:"description"`
 		Mode               string  `json:"mode" binding:"required"`
+		IsDemo             bool    `json:"is_demo"`
 		Threshold          int     `json:"threshold"`
 		StakeAmount        float64 `json:"stake_amount" binding:"required"`
 		ParticipantTarget  int     `json:"participant_target" binding:"required"`
@@ -32,6 +33,7 @@ func CreateVSEvent(c *gin.Context) {
 		Description:        req.Description,
 		CreatorEmail:       email,
 		Mode:               models.VSMode(req.Mode),
+		IsDemo:             req.IsDemo,
 		Threshold:          req.Threshold,
 		StakeAmount:        req.StakeAmount,
 		ParticipantTarget:  req.ParticipantTarget,
