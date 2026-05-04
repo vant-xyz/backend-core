@@ -107,3 +107,27 @@ func ListVSEvents(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "events": events, "count": len(events)})
 }
+
+func ListMyCreatedVSEvents(c *gin.Context) {
+	email := c.GetString("email")
+	status := c.Query("status")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	events, err := db.ListVSEventsByCreator(c.Request.Context(), email, status, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "events": events, "count": len(events)})
+}
+
+func ListMyJoinedVSEvents(c *gin.Context) {
+	email := c.GetString("email")
+	status := c.Query("status")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	events, err := db.ListVSEventsByParticipant(c.Request.Context(), email, status, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "events": events, "count": len(events)})
+}

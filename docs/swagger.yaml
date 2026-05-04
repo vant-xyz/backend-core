@@ -3377,6 +3377,66 @@ paths:
         '404':
           description: Not found
 
+  /vs/events/mine/created:
+    get:
+      tags: [VS]
+      summary: List VS events created by the authenticated user
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, active, resolved, cancelled, disputed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: VS events list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  count: { type: integer }
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VSEvent'
+
+  /vs/events/mine/joined:
+    get:
+      tags: [VS]
+      summary: List VS events joined by the authenticated user
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, active, resolved, cancelled, disputed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: VS events list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  count: { type: integer }
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VSEvent'
+
   /vs/events/{id}/join:
     post:
       tags: [VS]

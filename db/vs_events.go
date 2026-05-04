@@ -156,6 +156,72 @@ func ListVSEvents(ctx context.Context, status string, limit int) ([]models.VSEve
 	return out, pgRows.Err()
 }
 
+func ListVSEventsByCreator(ctx context.Context, creatorEmail, status string, limit int) ([]models.VSEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := `
+		SELECT id,title,description,creator_email,mode,threshold,stake_amount,participant_target,
+		status,outcome,outcome_description,creation_tx_hash,settlement_tx_hash,chain_state,is_demo,
+		join_deadline_utc,resolve_deadline_utc,created_at,updated_at,resolved_at
+		FROM vs_events
+		WHERE creator_email=$1`
+	args := []interface{}{creatorEmail}
+	if status != "" {
+		query += ` AND status=$2 ORDER BY created_at DESC LIMIT $3`
+		args = append(args, status, limit)
+	} else {
+		query += ` ORDER BY created_at DESC LIMIT $2`
+		args = append(args, limit)
+	}
+	return listVSEventsByQuery(ctx, query, args...)
+}
+
+func ListVSEventsByParticipant(ctx context.Context, participantEmail, status string, limit int) ([]models.VSEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := `
+		SELECT DISTINCT e.id,e.title,e.description,e.creator_email,e.mode,e.threshold,e.stake_amount,e.participant_target,
+		e.status,e.outcome,e.outcome_description,e.creation_tx_hash,e.settlement_tx_hash,e.chain_state,e.is_demo,
+		e.join_deadline_utc,e.resolve_deadline_utc,e.created_at,e.updated_at,e.resolved_at
+		FROM vs_events e
+		JOIN vs_event_participants p ON p.vs_event_id = e.id
+		WHERE p.user_email=$1`
+	args := []interface{}{participantEmail}
+	if status != "" {
+		query += ` AND e.status=$2 ORDER BY e.created_at DESC LIMIT $3`
+		args = append(args, status, limit)
+	} else {
+		query += ` ORDER BY e.created_at DESC LIMIT $2`
+		args = append(args, limit)
+	}
+	return listVSEventsByQuery(ctx, query, args...)
+}
+
+func listVSEventsByQuery(ctx context.Context, query string, args ...interface{}) ([]models.VSEvent, error) {
+	pgRows, err := Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer pgRows.Close()
+	out := []models.VSEvent{}
+	for pgRows.Next() {
+		var e models.VSEvent
+		var mode, st, oc string
+		if err := pgRows.Scan(&e.ID, &e.Title, &e.Description, &e.CreatorEmail, &mode, &e.Threshold, &e.StakeAmount,
+			&e.ParticipantTarget, &st, &oc, &e.OutcomeDescription, &e.CreationTxHash, &e.SettlementTxHash,
+			&e.ChainState, &e.IsDemo, &e.JoinDeadlineUTC, &e.ResolveDeadlineUTC, &e.CreatedAt, &e.UpdatedAt, &e.ResolvedAt); err != nil {
+			return nil, err
+		}
+		e.Mode = models.VSMode(mode)
+		e.Status = models.VSStatus(st)
+		e.Outcome = models.VSOutcome(oc)
+		out = append(out, e)
+	}
+	return out, pgRows.Err()
+}
+
 func UpdateVSEventFields(ctx context.Context, eventID string, fields map[string]interface{}) error {
 	if len(fields) == 0 {
 		return nil

@@ -159,6 +159,8 @@ func main() {
 		auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
 		auth.POST("/vs/events", handlers.CreateVSEvent)
 		auth.GET("/vs/events", handlers.ListVSEvents)
+		auth.GET("/vs/events/mine/created", handlers.ListMyCreatedVSEvents)
+		auth.GET("/vs/events/mine/joined", handlers.ListMyJoinedVSEvents)
 		auth.GET("/vs/events/:id", handlers.GetVSEvent)
 		auth.POST("/vs/events/:id/join", handlers.JoinVSEvent)
 		auth.POST("/vs/events/:id/confirm", handlers.ConfirmVSEvent)
