@@ -804,10 +804,10 @@ func persistFillAsync(taker, maker *models.Order, qty, price float64, marketID s
 	makerSnap.Status = makerStatus
 	db.AsyncSyncFillToPG(&makerSnap)
 
-	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*price); err != nil {
+	if err := services.DeductLockedBalanceByCurrency(ctx, taker.UserEmail, qty*price, orderBalanceCurrency(taker.IsDemo)); err != nil {
 		log.Printf("[Engine] Failed to deduct locked balance for taker %s: %v", taker.UserEmail, err)
 	}
-	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*price); err != nil {
+	if err := services.DeductLockedBalanceByCurrency(ctx, maker.UserEmail, qty*price, orderBalanceCurrency(maker.IsDemo)); err != nil {
 		log.Printf("[Engine] Failed to deduct locked balance for maker %s: %v", maker.UserEmail, err)
 	}
 
@@ -881,10 +881,10 @@ func persistCrossFillAsync(taker, maker *models.Order, qty, takerPrice, makerPri
 
 	log.Printf("[Engine] CrossFill[%s]: deducting — taker=%s amount=%.4f maker=%s amount=%.4f",
 		fillID, taker.UserEmail, qty*takerPrice, maker.UserEmail, qty*makerPrice)
-	if err := services.DeductLockedBalance(ctx, taker.UserEmail, qty*takerPrice); err != nil {
+	if err := services.DeductLockedBalanceByCurrency(ctx, taker.UserEmail, qty*takerPrice, orderBalanceCurrency(taker.IsDemo)); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for taker %s: %v", fillID, taker.UserEmail, err)
 	}
-	if err := services.DeductLockedBalance(ctx, maker.UserEmail, qty*makerPrice); err != nil {
+	if err := services.DeductLockedBalanceByCurrency(ctx, maker.UserEmail, qty*makerPrice, orderBalanceCurrency(maker.IsDemo)); err != nil {
 		log.Printf("[Engine] CrossFill[%s]: failed to deduct locked balance for maker %s: %v", fillID, maker.UserEmail, err)
 	}
 
