@@ -3213,6 +3213,66 @@ paths:
         '500':
           description: Key not configured or mainnet RPC unavailable
 
+  /admin/untether-reserve/{wallet_type}:
+    post:
+      tags: [Admin]
+      summary: Convert reserve stables (USDC/USDT) in MAS or fee wallet to PUSD
+      description: |
+        Admin operation that swaps all available USDC and USDT in the selected wallet to PUSD
+        via Jupiter.
+
+        - `wallet_type=mas` uses `VANT_MARKET_APPROVED_SETLLER_KEYPAIR`
+        - `wallet_type=fee` uses `VANTIC_FEE_WALLET_SOL_PRIVATE_KEY`
+
+        Mainnet only. The output mint is `MAINNET_SOL_PUSD_MINT` when set, otherwise
+        the platform default PUSD mainnet mint. Returns per-asset swap results.
+      security:
+        - adminKey: []
+      parameters:
+        - in: path
+          name: wallet_type
+          required: true
+          schema:
+            type: string
+            enum: [mas, fee]
+      responses:
+        '200':
+          description: Untether operation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  result:
+                    type: object
+                    properties:
+                      wallet_type:
+                        type: string
+                        enum: [mas, fee]
+                      wallet:
+                        type: string
+                        description: Source wallet public key
+                      swaps:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            asset:
+                              type: string
+                              enum: [USDC, USDT]
+                            amount:
+                              type: number
+                            tx_hash:
+                              type: string
+                            error:
+                              type: string
+                      error:
+                        type: string
+        '500':
+          description: Mainnet/env/key/swap failure
+
   /vs/events:
     get:
       tags: [VS]

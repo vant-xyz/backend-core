@@ -121,13 +121,8 @@ type jupiterExecuteResp struct {
 	Status string `json:"status"`
 }
 
-func jupiterSwapToUSDC(ctx context.Context, taker solana.PrivateKey, inputMint string, amountBaseUnits uint64) (string, error) {
-	outputMint := mainnetUSDCMint
-	if m := os.Getenv("MAINNET_SOL_USDC_MINT"); m != "" {
-		outputMint = m
-	}
-
-	orderURL := fmt.Sprintf("%s/swap/v2/order?inputMint=%s&outputMint=%s&amount=%d&taker=%s",
+func jupiterSwapToTargetMint(ctx context.Context, taker solana.PrivateKey, inputMint, outputMint string, amountBaseUnits uint64) (string, error) {
+	orderURL := fmt.Sprintf("%s/swap/v2/quote?inputMint=%s&outputMint=%s&amount=%d&taker=%s",
 		jupiterBase, inputMint, outputMint, amountBaseUnits, taker.PublicKey().String())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", orderURL, nil)
@@ -139,21 +134,26 @@ func jupiterSwapToUSDC(ctx context.Context, taker solana.PrivateKey, inputMint s
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("jupiter order: %w", err)
+		return "", fmt.Errorf("jupiter quote: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("jupiter order %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("jupiter quote %d: %s", resp.StatusCode, string(body))
 	}
 
-	var orderResp jupiterOrderResp
-	if err := json.NewDecoder(resp.Body).Decode(&orderResp); err != nil {
-		return "", fmt.Errorf("decode jupiter order: %w", err)
+	var quoteResp struct {
+		QuoteResponse struct {
+			SwapTransaction string `json:"swapTransaction"`
+			RequestID       string `json:"requestId"`
+		} `json:"quoteResponse"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&quoteResp); err != nil {
+		return "", fmt.Errorf("decode jupiter quote: %w", err)
 	}
 
-	txBytes, err := base64.StdEncoding.DecodeString(orderResp.Transaction)
+	txBytes, err := base64.StdEncoding.DecodeString(quoteResp.QuoteResponse.SwapTransaction)
 	if err != nil {
 		return "", fmt.Errorf("decode jupiter tx: %w", err)
 	}
@@ -179,7 +179,7 @@ func jupiterSwapToUSDC(ctx context.Context, taker solana.PrivateKey, inputMint s
 
 	execBody, _ := json.Marshal(map[string]string{
 		"signedTransaction": base64.StdEncoding.EncodeToString(signedBytes),
-		"requestId":         orderResp.RequestID,
+		"requestId":         quoteResp.QuoteResponse.RequestID,
 	})
 
 	execReq, err := http.NewRequestWithContext(ctx, "POST", jupiterBase+"/swap/v2/execute", bytes.NewReader(execBody))
@@ -210,6 +210,10 @@ func jupiterSwapToUSDC(ctx context.Context, taker solana.PrivateKey, inputMint s
 	}
 
 	return execResult.TxID, nil
+}
+
+func JupiterSwapToTargetMint(ctx context.Context, taker solana.PrivateKey, inputMint, outputMint string, amountBaseUnits uint64) (string, error) {
+	return jupiterSwapToTargetMint(ctx, taker, inputMint, outputMint, amountBaseUnits)
 }
 
 type dumpableAsset struct {
@@ -291,7 +295,7 @@ func DumpWalletToUSDC(ctx context.Context, taker solana.PrivateKey) ([]SwapResul
 		}
 		amountUnits -= asset.keepBuf
 
-		txHash, swapErr := jupiterSwapToUSDC(ctx, taker, asset.mint, amountUnits)
+		txHash, swapErr := jupiterSwapToTargetMint(ctx, taker, asset.mint, mainnetUSDCMint, amountUnits)
 		if swapErr != nil {
 			results = append(results, SwapResult{Asset: asset.ticker, Amount: balFloat, Error: swapErr.Error()})
 			continue

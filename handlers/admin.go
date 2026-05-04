@@ -265,11 +265,11 @@ func GetUserExposure(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":               true,
-		"user_email":            userEmail,
-		"active_markets":        len(exposureMap),
+		"success":                true,
+		"user_email":             userEmail,
+		"active_markets":         len(exposureMap),
 		"total_locked_in_orders": totalLockedInOrders,
-		"exposure":              exposureList,
+		"exposure":               exposureList,
 	})
 }
 
@@ -425,14 +425,14 @@ func GetOverview(c *gin.Context) {
 	ctx := context.Background()
 
 	var (
-		userCount         int64
-		marketCount       int64
-		activeMarkets     int64
-		orderCount        int64
-		txCount           int64
-		tvlReal           float64
-		tvlDemo           float64
-		totalLocked       float64
+		userCount     int64
+		marketCount   int64
+		activeMarkets int64
+		orderCount    int64
+		txCount       int64
+		tvlReal       float64
+		tvlDemo       float64
+		totalLocked   float64
 	)
 
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount)
@@ -573,11 +573,27 @@ func DumpFeeWalletToUSDC(c *gin.Context) {
 	}
 	privKey := solanago.PrivateKey(keyBytes)
 
-	results, err := services.DumpWalletToUSDC(c.Request.Context(), privKey)
+	results, err := marketsvc.DumpWalletToUSDC(c.Request.Context(), privKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "wallet": privKey.PublicKey().String(), "swaps": results})
+}
+
+func UntetherReserve(c *gin.Context) {
+	walletType := c.Param("wallet_type")
+	if walletType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Wallet type (fee or mas) required"})
+		return
+	}
+
+	result, err := marketsvc.UntetherReserve(c.Request.Context(), walletType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to untether reserve: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "result": result})
 }
