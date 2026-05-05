@@ -217,3 +217,22 @@ func GetMarketTrades(c *gin.Context) {
 		"count":     len(trades),
 	})
 }
+
+func GetMarketVolume(c *gin.Context) {
+	marketID := c.Param("id")
+	if marketID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Market ID required"})
+		return
+	}
+
+	stats, err := marketsvc.GetMarketVolumeStats(c.Request.Context(), marketID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch market volume: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"volume":  stats,
+	})
+}

@@ -33,6 +33,16 @@ type FillPreview struct {
 	TotalCost       float64          `json:"total_cost"`
 }
 
+type MarketVolumeStats struct {
+	MarketID        string  `json:"market_id"`
+	TradeCount      int     `json:"trade_count"`
+	Volume          float64 `json:"volume"`
+	YesVolume       float64 `json:"yes_volume"`
+	NoVolume        float64 `json:"no_volume"`
+	YesVolumeShares float64 `json:"yes_volume_shares"`
+	NoVolumeShares  float64 `json:"no_volume_shares"`
+}
+
 func GetMarketCandles(ctx context.Context, marketID string) ([]CandlePoint, int64, error) {
 	market, err := GetMarketByID(ctx, marketID)
 	if err != nil {
@@ -176,4 +186,33 @@ func computeFillPreview(side models.OrderSide, stake float64, asks []OrderbookLe
 
 func GetMarketTrades(ctx context.Context, marketID string, limit int) ([]models.Order, error) {
 	return db.GetMarketTrades(ctx, marketID, limit)
+}
+
+func GetMarketVolumeStats(ctx context.Context, marketID string) (*MarketVolumeStats, error) {
+	filled, err := db.GetMarketFilledOrders(ctx, marketID)
+	if err != nil {
+		return nil, err
+	}
+
+	stats := &MarketVolumeStats{
+		MarketID: marketID,
+	}
+
+	for _, o := range filled {
+		if o.FilledQty <= 0 {
+			continue
+		}
+		stats.TradeCount++
+		notional := o.Price * o.FilledQty
+		stats.Volume += notional
+		if o.Side == models.OrderSideYes {
+			stats.YesVolume += notional
+			stats.YesVolumeShares += o.FilledQty
+		} else {
+			stats.NoVolume += notional
+			stats.NoVolumeShares += o.FilledQty
+		}
+	}
+
+	return stats, nil
 }
