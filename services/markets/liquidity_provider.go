@@ -208,8 +208,25 @@ func StartGlobalLiquidityManager() {
 
 	log.Printf("[LiquidityManager] Found %d active markets to seed", len(markets))
 	for _, m := range markets {
-		market := m // copy for closure
+		market := m
 		go StartLiquidityProvider(&market)
+	}
+
+	go runBotOrderPurge()
+}
+
+func runBotOrderPurge() {
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		n, err := db.PurgeBotOrders(ctx, botEmails, 24*time.Hour)
+		cancel()
+		if err != nil {
+			log.Printf("[LiquidityPurge] Failed: %v", err)
+		} else {
+			log.Printf("[LiquidityPurge] Purged %d old bot orders", n)
+		}
 	}
 }
 

@@ -373,12 +373,11 @@ func transferSPLTokenWithRPC(senderPrivateKey, recipientPublicKey, mintPublicKey
 		computebudget.NewSetComputeUnitPriceInstruction(100000).Build(),
 	}
 
-	// Ensure destination ATA exists.
 	{
 		checkCtx, checkCancel := context.WithTimeout(context.Background(), rpcTimeout)
 		defer checkCancel()
-		_, err = client.GetAccountInfo(checkCtx, destATA)
-		if err != nil {
+		info, infoErr := client.GetAccountInfo(checkCtx, destATA)
+		if infoErr == nil && (info == nil || info.Value == nil) {
 			instructions = append(instructions, associatedtokenaccount.NewCreateInstruction(
 				feePayerWallet.PublicKey(),
 				dest,

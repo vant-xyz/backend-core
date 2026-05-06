@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/vant-xyz/backend-code/models"
@@ -191,4 +192,18 @@ func scanOrders(rows pgx.Rows) ([]models.Order, error) {
 		orders = append(orders, *o)
 	}
 	return orders, rows.Err()
+}
+
+func PurgeBotOrders(ctx context.Context, botEmails []string, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	tag, err := Pool.Exec(ctx, `
+		DELETE FROM orders
+		WHERE user_email = ANY($1)
+		  AND status IN ('FILLED', 'CANCELLED')
+		  AND updated_at < $2
+	`, botEmails, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
