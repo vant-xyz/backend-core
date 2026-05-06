@@ -311,6 +311,44 @@ func SellAsset(c *gin.Context) {
 				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
 				return
 			}
+		} else if req.Asset == "usdc_sol" || req.Asset == "demo_usdc_sol" {
+			decryptedPrivKey, decErr := services.Decrypt(wallet.SolPrivateKey)
+			if decErr != nil {
+				log.Printf("[Sell] Failed to decrypt private key for SPL sell %s, reversing deduction: %v", email, decErr)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
+				return
+			}
+
+			vaultPubKey := os.Getenv("VANT_SOLANA_VAULT_PUBLIC_KEY")
+			if vaultPubKey == "" {
+				log.Printf("[Sell] Missing VANT_SOLANA_VAULT_PUBLIC_KEY for SPL sell %s, reversing deduction", email)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
+				return
+			}
+
+			var mint string
+			var rpcURL string
+			decimals := uint8(6)
+			if req.Asset == "demo_usdc_sol" {
+				mint = os.Getenv("DEVNET_SOL_USDC_MINT")
+				rpcURL = os.Getenv("DEVNET_SOLANA_RPC_URL")
+			} else {
+				m, d, r := services.AssetMintConfig("usdc_sol")
+				mint, decimals, rpcURL = m, d, r
+			}
+
+			if mint == "" || rpcURL == "" {
+				log.Printf("[Sell] Missing SPL config for %s (mint=%q rpc=%q), reversing deduction", req.Asset, mint, rpcURL)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
+				return
+			}
+
+			txHash, err = services.TransferSPLToken(decryptedPrivKey, vaultPubKey, mint, decimals, req.Amount, rpcURL)
+			if err != nil {
+				log.Printf("[Sell] SPL vault transfer failed for %s asset=%s, reversing deduction: %v", email, req.Asset, err)
+				db.UpdateBalance(bgCtx, email, req.Asset, req.Amount)
+				return
+			}
 		}
 
 		nairaField := "naira"
