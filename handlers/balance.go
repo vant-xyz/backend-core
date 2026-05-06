@@ -34,6 +34,10 @@ func WithdrawBalance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
 		return
 	}
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
+		return
+	}
 	withdrawChain := feeChainSolana
 	if strings.HasPrefix(strings.ToLower(req.DestinationAddress), "0x") {
 		withdrawChain = feeChainBase
@@ -274,8 +278,13 @@ func SellAsset(c *gin.Context) {
 		return
 	}
 
-	if err = db.UpdateBalance(c.Request.Context(), email, req.Asset, -req.Amount); err != nil {
+	deducted, err := db.DeductBalanceIfSufficient(c.Request.Context(), email, req.Asset, req.Amount)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to initiate deduction"})
+		return
+	}
+	if !deducted {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Insufficient balance"})
 		return
 	}
 

@@ -45,6 +45,29 @@ func UpdateBalance(ctx context.Context, email string, field string, amount float
 	return err
 }
 
+// DeductBalanceIfSufficient atomically subtracts amount from a balance field
+// only when the current value is >= amount.
+// Returns (true, nil) on successful deduction, (false, nil) when insufficient.
+func DeductBalanceIfSufficient(ctx context.Context, email string, field string, amount float64) (bool, error) {
+	if amount <= 0 {
+		return false, fmt.Errorf("amount must be positive")
+	}
+	col, err := balanceFieldToColumn(field)
+	if err != nil {
+		return false, err
+	}
+	tag, err := Pool.Exec(
+		ctx,
+		fmt.Sprintf(`UPDATE balances SET %s = %s - $1 WHERE email = $2 AND %s >= $1`, col, col, col),
+		amount,
+		email,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func SetBalance(ctx context.Context, email string, field string, amount float64) error {
 	col, err := balanceFieldToColumn(field)
 	if err != nil {

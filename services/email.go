@@ -159,7 +159,7 @@ func SendWaitlistEmail(toEmail, referralCode string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("[VAS] unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -219,7 +219,7 @@ func SendTransactionEmail(toEmail string, tx models.Transaction) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("[VAS] unexpected status code: %d", resp.StatusCode)
 	}
 
