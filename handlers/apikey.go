@@ -19,7 +19,12 @@ func APIKeyMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if c.GetHeader("X-API-Key") != masterKey {
+		key := c.GetHeader("X-API-Key")
+		if key == "" {
+			// Allow query-param key for browser GETs to avoid CORS preflight spam.
+			key = c.Query("api_key")
+		}
+		if key != masterKey {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
 			return
 		}

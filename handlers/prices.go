@@ -3,9 +3,22 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/services"
+)
+
+type tokenPricesCacheEntry struct {
+	key       string
+	expiresAt time.Time
+	prices    map[string]float64
+}
+
+var (
+	tokenPricesCacheMu sync.RWMutex
+	tokenPricesCache   tokenPricesCacheEntry
 )
 
 func GetPrices(c *gin.Context) {
@@ -34,12 +47,31 @@ func GetJupiterTokenPrices(c *gin.Context) {
 	for i, t := range tickers {
 		tickers[i] = strings.TrimSpace(t)
 	}
+	cacheKey := strings.Join(tickers, ",")
+
+	tokenPricesCacheMu.RLock()
+	if tokenPricesCache.key == cacheKey && time.Now().Before(tokenPricesCache.expiresAt) {
+		cached := tokenPricesCache.prices
+		tokenPricesCacheMu.RUnlock()
+		c.JSON(http.StatusOK, gin.H{"success": true, "prices": cached})
+		return
+	}
+	tokenPricesCacheMu.RUnlock()
 
 	prices, err := services.GetTokenPrices(tickers)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch prices: " + err.Error()})
 		return
 	}
+
+	tokenPricesCacheMu.Lock()
+	tokenPricesCache = tokenPricesCacheEntry{
+		key:       cacheKey,
+		expiresAt: time.Now().Add(5 * time.Second),
+		prices:    prices,
+	}
+	tokenPricesCacheMu.Unlock()
+
 	c.JSON(http.StatusOK, gin.H{"success": true, "prices": prices})
 }
 
