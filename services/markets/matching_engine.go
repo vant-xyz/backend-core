@@ -918,6 +918,11 @@ func persistCrossFillAsync(taker, maker *models.Order, qty, takerPrice, makerPri
 		"qty":         qty,
 		"taker_side":  taker.Side,
 	})
+
+	if taker.UserEmail != maker.UserEmail {
+		go emitTradeCompleteEvent(taker.UserEmail, fillID+":taker", marketID, taker.Side, qty, takerPrice, taker.IsDemo)
+		go emitTradeCompleteEvent(maker.UserEmail, fillID+":maker", marketID, maker.Side, qty, makerPrice, maker.IsDemo)
+	}
 }
 
 func persistOrderFill(order *models.Order) {
@@ -966,4 +971,33 @@ func shortOrderID(id string) string {
 
 func persistenceReady() bool {
 	return db.Pool != nil && db.RDB != nil
+}
+
+func emitTradeCompleteEvent(userEmail, idempotencyKey, marketID string, side models.OrderSide, qty, price float64, isDemo bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	nature := "real"
+	if isDemo {
+		nature = "demo"
+	}
+
+	err := services.EmitTorqueEventByEmail(
+		ctx,
+		userEmail,
+		"vantic_trade_complete",
+		idempotencyKey,
+		map[string]interface{}{
+			"marketId":    marketID,
+			"side":        side,
+			"shares":      qty,
+			"price":       price,
+			"notional":    qty * price,
+			"nature":      nature,
+			"completedAt": time.Now().UTC().Format(time.RFC3339),
+		},
+	)
+	if err != nil {
+		log.Printf("[Torque] Failed to emit vantic_trade_complete for %s (%s): %v", userEmail, idempotencyKey, err)
+	}
 }

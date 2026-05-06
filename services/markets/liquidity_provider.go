@@ -5,6 +5,8 @@ import (
 	"log"
 	"math"
 	"math/rand/v2"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,12 +19,13 @@ const (
 	replenishThresholdQty  = 150.0
 	spreadBlowoutThreshold = 0.25
 	isMainnet              = false
-	devBotPairsPerCycle    = 6
 	maxBotSharesPerSide    = 2500.0
 )
 
 var takerBotPool []string
 var activeProviders sync.Map
+var lpCfg = loadLPConfig()
+var lpLimiter = newLPRateLimiter()
 
 var botEmails = []string{
 	"carsonpine@hotmail.com", "quaddavid4@hotmail.com", "vant.charlie@testmail.com",
@@ -39,6 +42,114 @@ var botEmails = []string{
 
 func init() {
 	takerBotPool = botEmails
+}
+
+type lpConfig struct {
+	updateInterval               time.Duration
+	intelligentTradeInterval     time.Duration
+	randomTradeInterval          time.Duration
+	botPairsPerCycle             int
+	seedLevels                   int
+	seedTradeFraction            float64
+	maxUpdatesPerMarketPerMinute int
+	maxGlobalUpdatesPerMinute    int
+	minRequoteMoveBps            float64
+}
+
+type lpRateLimiter struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	globalCount int
+	byMarket    map[string]int
+}
+
+func newLPRateLimiter() *lpRateLimiter {
+	return &lpRateLimiter{
+		windowStart: time.Now().UTC().Truncate(time.Minute),
+		byMarket:    make(map[string]int),
+	}
+}
+
+func (l *lpRateLimiter) allow(marketID string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now().UTC()
+	window := now.Truncate(time.Minute)
+	if window.After(l.windowStart) {
+		l.windowStart = window
+		l.globalCount = 0
+		l.byMarket = make(map[string]int)
+	}
+
+	if lpCfg.maxGlobalUpdatesPerMinute > 0 && l.globalCount >= lpCfg.maxGlobalUpdatesPerMinute {
+		return false
+	}
+	if lpCfg.maxUpdatesPerMarketPerMinute > 0 && l.byMarket[marketID] >= lpCfg.maxUpdatesPerMarketPerMinute {
+		return false
+	}
+
+	l.globalCount++
+	l.byMarket[marketID]++
+	return true
+}
+
+func envInt(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		log.Printf("[Liquidity] Invalid %s=%q, using fallback=%d", key, raw, fallback)
+		return fallback
+	}
+	return v
+}
+
+func envFloat(key string, fallback float64) float64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 {
+		log.Printf("[Liquidity] Invalid %s=%q, using fallback=%.4f", key, raw, fallback)
+		return fallback
+	}
+	return v
+}
+
+func loadLPConfig() lpConfig {
+	cfg := lpConfig{
+		updateInterval:               time.Duration(envInt("LP_UPDATE_INTERVAL_SEC", 60)) * time.Second,
+		intelligentTradeInterval:     time.Duration(envInt("LP_INTELLIGENT_TRADE_INTERVAL_SEC", 90)) * time.Second,
+		randomTradeInterval:          time.Duration(envInt("LP_RANDOM_TRADE_INTERVAL_SEC", 60)) * time.Second,
+		botPairsPerCycle:             envInt("LP_BOT_PAIRS_PER_CYCLE", 2),
+		seedLevels:                   envInt("LP_SEED_LEVELS", 6),
+		seedTradeFraction:            envFloat("LP_SEED_TRADE_FRACTION", 0.2),
+		maxUpdatesPerMarketPerMinute: envInt("LP_MAX_UPDATES_PER_MARKET_PER_MIN", 2),
+		maxGlobalUpdatesPerMinute:    envInt("LP_MAX_GLOBAL_UPDATES_PER_MIN", 100),
+		minRequoteMoveBps:            envFloat("LP_MIN_REQUOTE_MOVE_BPS", 50.0),
+	}
+
+	if cfg.seedTradeFraction > 1 {
+		cfg.seedTradeFraction = 1
+	}
+
+	log.Printf(
+		"[Liquidity] Config: update=%s intelligent=%s random=%s pairs=%d seed_levels=%d seed_fraction=%.2f cap_market=%d/min cap_global=%d/min min_move=%.2fbps",
+		cfg.updateInterval,
+		cfg.intelligentTradeInterval,
+		cfg.randomTradeInterval,
+		cfg.botPairsPerCycle,
+		cfg.seedLevels,
+		cfg.seedTradeFraction,
+		cfg.maxUpdatesPerMarketPerMinute,
+		cfg.maxGlobalUpdatesPerMinute,
+		cfg.minRequoteMoveBps,
+	)
+	return cfg
 }
 
 func StartLiquidityProvider(market *models.Market) {
@@ -87,7 +198,7 @@ func runLiquidityLifecycle(market *models.Market) {
 		go runRandomTradingLoop(market)
 	}
 
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(lpCfg.updateInterval)
 	defer ticker.Stop()
 
 	for {
@@ -107,7 +218,7 @@ func runLiquidityLifecycle(market *models.Market) {
 }
 
 func seedInitialLiquidity(ctx context.Context, market *models.Market) {
-	levels := 10
+	levels := lpCfg.seedLevels
 	basePrice := 0.49
 
 	for i := 0; i < levels; i++ {
@@ -152,6 +263,10 @@ func seedInitialLiquidity(ctx context.Context, market *models.Market) {
 }
 
 func updateLiquidity(ctx context.Context, market *models.Market) {
+	if !lpLimiter.allow(market.ID) {
+		return
+	}
+
 	var prob float64
 	var err error
 
@@ -185,10 +300,21 @@ func updateLiquidity(ctx context.Context, market *models.Market) {
 		noBid = 0.01
 	}
 
+	engine := GetMatchingEngine()
+	yesBids := engine.GetDepth(market.ID, models.OrderSideYes, "bids")
+	noBids := engine.GetDepth(market.ID, models.OrderSideNo, "bids")
+	if len(yesBids) > 0 && len(noBids) > 0 {
+		prevProb := (yesBids[0].Price + (1 - noBids[0].Price)) / 2
+		moveBps := math.Abs(prob-prevProb) * 10000
+		if moveBps < lpCfg.minRequoteMoveBps {
+			return
+		}
+	}
+
 	cleanupBotOrders(ctx, market.ID)
 
 	perm := rand.Perm(len(botEmails))
-	pairs := devBotPairsPerCycle
+	pairs := lpCfg.botPairsPerCycle
 	maxPairs := len(botEmails) / 2
 	if pairs > maxPairs {
 		pairs = maxPairs
@@ -272,7 +398,10 @@ func computeFairValue(market *models.Market) (float64, error) {
 }
 
 func seedInitialTrades(ctx context.Context, market *models.Market) {
-	count := int(math.Round(float64(len(botEmails)) * 0.7))
+	count := int(math.Round(float64(len(botEmails)) * lpCfg.seedTradeFraction))
+	if count < 1 {
+		count = 1
+	}
 	perm := rand.Perm(len(botEmails))
 	for i := 0; i < count; i++ {
 		bot := botEmails[perm[i]]
@@ -295,7 +424,7 @@ func seedInitialTrades(ctx context.Context, market *models.Market) {
 }
 
 func runIntelligentTradingLoop(market *models.Market) {
-	ticker := time.NewTicker(30*time.Second + time.Duration(rand.IntN(15))*time.Second)
+	ticker := time.NewTicker(lpCfg.intelligentTradeInterval + time.Duration(rand.IntN(10))*time.Second)
 	defer ticker.Stop()
 	deadline := time.NewTimer(time.Until(market.EndTimeUTC))
 	defer deadline.Stop()
@@ -315,7 +444,7 @@ func runIntelligentTradingLoop(market *models.Market) {
 }
 
 func runRandomTradingLoop(market *models.Market) {
-	ticker := time.NewTicker(15*time.Second + time.Duration(rand.IntN(10))*time.Second)
+	ticker := time.NewTicker(lpCfg.randomTradeInterval + time.Duration(rand.IntN(10))*time.Second)
 	defer ticker.Stop()
 	deadline := time.NewTimer(time.Until(market.EndTimeUTC))
 	defer deadline.Stop()

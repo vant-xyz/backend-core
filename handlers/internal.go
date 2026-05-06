@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,15 @@ import (
 	"github.com/vant-xyz/backend-code/services"
 	"github.com/vant-xyz/backend-code/utils"
 )
+
+var updateBalanceFn = db.UpdateBalance
+var saveTransactionFn = db.SaveTransaction
+var sendTransactionEmailFn = services.SendTransactionEmail
+var emitTorqueEventByEmailFn = services.EmitTorqueEventByEmail
+var sweepDepositFeeOptimisticFn = services.SweepDepositFeeOptimistic
+var broadcastBalanceUpdateFn = func(email string) {
+	services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
+}
 
 func GetInternalWallets(c *gin.Context) {
 	wallets, err := db.GetAllWallets(c.Request.Context())
@@ -58,7 +68,7 @@ func HandleInternalDeposit(c *gin.Context) {
 		}
 	}
 
-	if err := db.UpdateBalance(c.Request.Context(), req.Email, dbField, netAmount); err != nil {
+	if err := updateBalanceFn(c.Request.Context(), req.Email, dbField, netAmount); err != nil {
 		log.Printf("[Deposit] Failed to update field %s for %s: %v", dbField, req.Email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to update user balance"})
 		return
@@ -79,17 +89,46 @@ func HandleInternalDeposit(c *gin.Context) {
 		TxHash:    req.TxHash,
 		CreatedAt: time.Now(),
 	}
-	db.SaveTransaction(c.Request.Context(), transaction)
+	saveTransactionFn(c.Request.Context(), transaction)
 
 	go func(toEmail string, tx models.Transaction) {
-		if err := services.SendTransactionEmail(toEmail, tx); err != nil {
+		if err := sendTransactionEmailFn(toEmail, tx); err != nil {
 			log.Printf("[Email] Failed to send deposit email to %s (txID: %s): %v", toEmail, tx.ID, err)
 		}
 	}(req.Email, transaction)
 
-	services.SweepDepositFeeOptimistic(req.Email, baseAsset, req.Network, feeAmount)
+	go func(email string, tx models.Transaction, chain string, grossAmount float64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-	services.PriceHub.BroadcastToUser(req.Email, "BALANCE_UPDATE")
+		err := emitTorqueEventByEmailFn(
+			ctx,
+			email,
+			"vantic_deposit",
+			tx.ID,
+			map[string]interface{}{
+				"transactionId": tx.ID,
+				"asset":         tx.Currency,
+				"network":       req.Network,
+				"chain":         chain,
+				"amountGross":   grossAmount,
+				"amountNet":     tx.Amount,
+				"feeAmount":     tx.FeeAmount,
+				"feeRate":       tx.FeeRate,
+				"txHash":        tx.TxHash,
+				"nature":        tx.Nature,
+				"status":        tx.Status,
+				"createdAt":     tx.CreatedAt.Format(time.RFC3339),
+			},
+		)
+		if err != nil {
+			log.Printf("[Torque] Failed to emit vantic_deposit for %s txID=%s: %v", email, tx.ID, err)
+		}
+	}(req.Email, transaction, string(chain), req.Amount)
+
+	sweepDepositFeeOptimisticFn(req.Email, baseAsset, req.Network, feeAmount)
+
+	broadcastBalanceUpdateFn(req.Email)
 
 	log.Printf("[Deposit] Fee applied email=%s asset=%s gross=%.8f fee=%.8f net=%.8f fee_wallet=%s",
 		req.Email, req.Asset, req.Amount, feeAmount, netAmount, feeWalletForChain(chain))
