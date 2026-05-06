@@ -289,6 +289,41 @@ func TransferSol(senderPrivateKey, recipientPublicKey string, amountSol float64)
 }
 
 func TransferSPLToken(senderPrivateKey, recipientPublicKey, mintPublicKey string, decimals uint8, amount float64, rpcURL string) (string, error) {
+	candidates := []string{}
+	addCandidate := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == url {
+				return
+			}
+		}
+		candidates = append(candidates, url)
+	}
+
+	addCandidate(rpcURL)
+	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL"))
+	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL_1"))
+	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL_2"))
+	addCandidate(os.Getenv("MAINNET_SOLANA_RPC_URL"))
+
+	var lastErr error
+	for _, u := range candidates {
+		sig, err := transferSPLTokenWithRPC(senderPrivateKey, recipientPublicKey, mintPublicKey, decimals, amount, u)
+		if err == nil {
+			return sig, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no rpc candidates available")
+	}
+	return "", lastErr
+}
+
+func transferSPLTokenWithRPC(senderPrivateKey, recipientPublicKey, mintPublicKey string, decimals uint8, amount float64, rpcURL string) (string, error) {
 	if amount <= 0 {
 		return "", fmt.Errorf("amount must be positive")
 	}
@@ -391,7 +426,7 @@ func TransferSPLToken(senderPrivateKey, recipientPublicKey, mintPublicKey string
 
 	sig, err := confirm.SendAndConfirmTransaction(ctx, client, wsClient, tx)
 	if err != nil {
-		return "", fmt.Errorf("SendAndConfirmTransaction failed: %w", err)
+		return "", fmt.Errorf("SendAndConfirmTransaction failed on rpc %s: %w", rpcURL, err)
 	}
 	return sig.String(), nil
 }

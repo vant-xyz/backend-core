@@ -146,8 +146,14 @@ func ClosePosition(ctx context.Context, input ClosePositionInput) (*models.Posit
 	if price == 0 {
 		price = position.AvgEntryPrice
 	}
+	if price <= 0 {
+		return nil, 0, fmt.Errorf("unable to close position %s: invalid close price", position.ID)
+	}
 
 	proceeds := input.Shares * price
+	if proceeds <= 0 {
+		return nil, 0, fmt.Errorf("unable to close position %s: non-positive proceeds", position.ID)
+	}
 	realizedPnL := proceeds - (input.Shares * position.AvgEntryPrice)
 	remainingShares := position.Shares - input.Shares
 	nextStatus := models.PositionStatusActive

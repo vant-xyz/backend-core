@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ var takerBotPool []string
 var activeProviders sync.Map
 var lpCfg = loadLPConfig()
 var lpLimiter = newLPRateLimiter()
+var replenishLastTime sync.Map // "marketID:side" → time.Time
+var tradeLastTime sync.Map     // marketID → time.Time
 
 var botEmails = []string{
 	"carsonpine@hotmail.com", "quaddavid4@hotmail.com", "vant.charlie@testmail.com",
@@ -45,6 +48,7 @@ func init() {
 }
 
 type lpConfig struct {
+	enableGemBots                bool
 	updateInterval               time.Duration
 	intelligentTradeInterval     time.Duration
 	randomTradeInterval          time.Duration
@@ -54,6 +58,8 @@ type lpConfig struct {
 	maxUpdatesPerMarketPerMinute int
 	maxGlobalUpdatesPerMinute    int
 	minRequoteMoveBps            float64
+	cleanupInterval              time.Duration
+	replenishCooldown            time.Duration
 }
 
 type lpRateLimiter struct {
@@ -120,17 +126,36 @@ func envFloat(key string, fallback float64) float64 {
 	return v
 }
 
+func envBool(key string, fallback bool) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		log.Printf("[Liquidity] Invalid %s=%q, using fallback=%t", key, raw, fallback)
+		return fallback
+	}
+}
+
 func loadLPConfig() lpConfig {
 	cfg := lpConfig{
-		updateInterval:               time.Duration(envInt("LP_UPDATE_INTERVAL_SEC", 60)) * time.Second,
-		intelligentTradeInterval:     time.Duration(envInt("LP_INTELLIGENT_TRADE_INTERVAL_SEC", 90)) * time.Second,
-		randomTradeInterval:          time.Duration(envInt("LP_RANDOM_TRADE_INTERVAL_SEC", 60)) * time.Second,
-		botPairsPerCycle:             envInt("LP_BOT_PAIRS_PER_CYCLE", 2),
-		seedLevels:                   envInt("LP_SEED_LEVELS", 6),
-		seedTradeFraction:            envFloat("LP_SEED_TRADE_FRACTION", 0.2),
-		maxUpdatesPerMarketPerMinute: envInt("LP_MAX_UPDATES_PER_MARKET_PER_MIN", 2),
-		maxGlobalUpdatesPerMinute:    envInt("LP_MAX_GLOBAL_UPDATES_PER_MIN", 100),
-		minRequoteMoveBps:            envFloat("LP_MIN_REQUOTE_MOVE_BPS", 50.0),
+		enableGemBots:                envBool("LP_ENABLE_GEM_BOTS", false),
+		updateInterval:               time.Duration(envInt("LP_UPDATE_INTERVAL_SEC", 180)) * time.Second,
+		intelligentTradeInterval:     time.Duration(envInt("LP_INTELLIGENT_TRADE_INTERVAL_SEC", 240)) * time.Second,
+		randomTradeInterval:          time.Duration(envInt("LP_RANDOM_TRADE_INTERVAL_SEC", 180)) * time.Second,
+		botPairsPerCycle:             envInt("LP_BOT_PAIRS_PER_CYCLE", 1),
+		seedLevels:                   envInt("LP_SEED_LEVELS", 3),
+		seedTradeFraction:            envFloat("LP_SEED_TRADE_FRACTION", 0.05),
+		maxUpdatesPerMarketPerMinute: envInt("LP_MAX_UPDATES_PER_MARKET_PER_MIN", 1),
+		maxGlobalUpdatesPerMinute:    envInt("LP_MAX_GLOBAL_UPDATES_PER_MIN", 30),
+		minRequoteMoveBps:            envFloat("LP_MIN_REQUOTE_MOVE_BPS", 80.0),
+		cleanupInterval:              time.Duration(envInt("LP_CLEANUP_INTERVAL_SEC", 600)) * time.Second,
+		replenishCooldown:            time.Duration(envInt("LP_REPLENISH_COOLDOWN_SEC", 120)) * time.Second,
 	}
 
 	if cfg.seedTradeFraction > 1 {
@@ -138,7 +163,8 @@ func loadLPConfig() lpConfig {
 	}
 
 	log.Printf(
-		"[Liquidity] Config: update=%s intelligent=%s random=%s pairs=%d seed_levels=%d seed_fraction=%.2f cap_market=%d/min cap_global=%d/min min_move=%.2fbps",
+		"[Liquidity] Config: gem=%t update=%s intelligent=%s random=%s pairs=%d seed_levels=%d seed_fraction=%.2f cap_market=%d/min cap_global=%d/min min_move=%.2fbps cleanup=%s replenish_cd=%s",
+		cfg.enableGemBots,
 		cfg.updateInterval,
 		cfg.intelligentTradeInterval,
 		cfg.randomTradeInterval,
@@ -148,6 +174,8 @@ func loadLPConfig() lpConfig {
 		cfg.maxUpdatesPerMarketPerMinute,
 		cfg.maxGlobalUpdatesPerMinute,
 		cfg.minRequoteMoveBps,
+		cfg.cleanupInterval,
+		cfg.replenishCooldown,
 	)
 	return cfg
 }
@@ -191,6 +219,11 @@ func runLiquidityLifecycle(market *models.Market) {
 
 	ctx := context.Background()
 	seedInitialLiquidity(ctx, market)
+
+	if market.MarketType == models.MarketTypeGEM && !lpCfg.enableGemBots {
+		log.Printf("[Liquidity] GEM loops disabled by config for %s", market.ID)
+		return
+	}
 
 	if market.MarketType == models.MarketTypeCAPPM {
 		go runIntelligentTradingLoop(market)
@@ -311,7 +344,9 @@ func updateLiquidity(ctx context.Context, market *models.Market) {
 		}
 	}
 
-	cleanupBotOrders(ctx, market.ID)
+	if shouldCleanupMarket(market.ID) {
+		cleanupBotOrders(ctx, market.ID)
+	}
 
 	perm := rand.Perm(len(botEmails))
 	pairs := lpCfg.botPairsPerCycle
@@ -593,6 +628,9 @@ func applyDepthGuardrails(ctx context.Context, marketID string) {
 }
 
 func replenishSide(ctx context.Context, marketID string, side models.OrderSide) {
+	if !allowReplenish(marketID, side) {
+		return
+	}
 	price := 0.49
 	qty := 150.0 + rand.Float64()*200.0
 	email := botEmails[rand.IntN(len(botEmails))]
@@ -628,4 +666,35 @@ func totalDepthQty(levels []OrderbookLevel) float64 {
 		total += l.Quantity
 	}
 	return total
+}
+
+func shouldCleanupMarket(marketID string) bool {
+	if lpCfg.cleanupInterval <= 0 {
+		return true
+	}
+	if v, ok := tradeLastTime.Load(marketID); ok {
+		if ts, ok := v.(time.Time); ok {
+			if time.Since(ts) < lpCfg.cleanupInterval {
+				return false
+			}
+		}
+	}
+	tradeLastTime.Store(marketID, time.Now())
+	return true
+}
+
+func allowReplenish(marketID string, side models.OrderSide) bool {
+	if lpCfg.replenishCooldown <= 0 {
+		return true
+	}
+	key := marketID + ":" + string(side)
+	if v, ok := replenishLastTime.Load(key); ok {
+		if ts, ok := v.(time.Time); ok {
+			if time.Since(ts) < lpCfg.replenishCooldown {
+				return false
+			}
+		}
+	}
+	replenishLastTime.Store(key, time.Now())
+	return true
 }
