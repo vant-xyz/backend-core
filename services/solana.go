@@ -303,11 +303,15 @@ func TransferSPLToken(senderPrivateKey, recipientPublicKey, mintPublicKey string
 		candidates = append(candidates, url)
 	}
 
+	isDevnet := strings.Contains(strings.ToLower(rpcURL), "devnet")
+
 	addCandidate(rpcURL)
 	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL"))
 	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL_1"))
 	addCandidate(os.Getenv("DEVNET_SOLANA_RPC_URL_2"))
-	addCandidate(os.Getenv("MAINNET_SOLANA_RPC_URL"))
+	if !isDevnet {
+		addCandidate(os.Getenv("MAINNET_SOLANA_RPC_URL"))
+	}
 
 	var lastErr error
 	for _, u := range candidates {
