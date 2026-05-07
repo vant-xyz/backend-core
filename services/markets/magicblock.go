@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
@@ -29,11 +30,11 @@ type privatePaymentReq struct {
 	Cluster     string `json:"cluster,omitempty"`
 }
 
-func getCluster() string {
-	if c := os.Getenv("SOLANA_CLUSTER"); c != "" {
-		return c
+func clusterForAsset(asset string) string {
+	if strings.HasPrefix(asset, "demo_") {
+		return "devnet"
 	}
-	return "devnet"
+	return "mainnet"
 }
 
 type privatePaymentResp struct {
@@ -52,15 +53,11 @@ func getUSDCMint() string {
 }
 
 func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
-	cluster := os.Getenv("SOLANA_CLUSTER")
-	if cluster == "" {
-		cluster = "devnet"
-	}
-	isDevnet := cluster == "devnet" || cluster == "testnet"
+	isDemo := strings.HasPrefix(asset, "demo_")
 
 	switch asset {
-	case "usdc_sol":
-		if isDevnet {
+	case "usdc_sol", "demo_usdc_sol":
+		if isDemo {
 			m := os.Getenv("DEVNET_SOL_USDC_MINT")
 			if m == "" {
 				m = getUSDCMint()
@@ -87,10 +84,7 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 	case "pusd_sol":
 		return "CZzgUBvxaMLwMhVSLgqJn3npmxoTo6nzMNQPAnwtHF3s", 6, nil
 	case "wsol":
-		m := os.Getenv("DEVNET_SOL_WSOL_MINT")
-		if !isDevnet {
-			m = os.Getenv("MAINNET_SOL_WSOL_MINT")
-		}
+		m := os.Getenv("MAINNET_SOL_WSOL_MINT")
 		if m == "" {
 			m = "So11111111111111111111111111111111111111112"
 		}
@@ -107,17 +101,22 @@ func getEphemeralRPCURL() string {
 	return "https://devnet-eu.magicblock.app"
 }
 
-func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64) (string, error) {
+func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64, isDemo bool) (string, error) {
 	settlerKey, err := getSettlerKeypair()
 	if err != nil {
 		return "", fmt.Errorf("settler keypair unavailable: %w", err)
 	}
+	cluster := "mainnet"
+	mint := os.Getenv("MAINNET_SOL_USDC_MINT")
+	if isDemo {
+		cluster = "devnet"
+		mint = getUSDCMint()
+	}
+	if mint == "" {
+		return "", fmt.Errorf("USDC mint not configured for cluster %s", cluster)
+	}
 	units := uint64(usdAmount * 1_000_000)
-	return SendPrivatePayment(ctx, settlerKey, recipientAddress, units)
-}
-
-func SendPrivatePayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress string, amount uint64) (string, error) {
-	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, getUSDCMint(), amount)
+	return sendPrivateSPLPayment(ctx, settlerKey, recipientAddress, mint, units, cluster)
 }
 
 func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, asset string, amount float64) (string, error) {
@@ -132,10 +131,10 @@ func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.Private
 	if baseUnits == 0 {
 		return "", fmt.Errorf("amount too small")
 	}
-	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, mint, baseUnits)
+	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, mint, baseUnits, clusterForAsset(asset))
 }
 
-func sendPrivateSPLPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, mint string, amount uint64) (string, error) {
+func sendPrivateSPLPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, mint string, amount uint64, cluster string) (string, error) {
 	reqBody := privatePaymentReq{
 		From:        payerKeypair.PublicKey().String(),
 		To:          recipientAddress,
@@ -144,7 +143,7 @@ func sendPrivateSPLPayment(ctx context.Context, payerKeypair solana.PrivateKey, 
 		FromBalance: "base",
 		ToBalance:   "base",
 		Visibility:  "private",
-		Cluster:     getCluster(),
+		Cluster:     cluster,
 	}
 
 	body, err := json.Marshal(reqBody)

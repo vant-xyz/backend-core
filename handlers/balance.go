@@ -25,13 +25,10 @@ func WithdrawBalance(c *gin.Context) {
 	var req struct {
 		Amount             float64 `json:"amount" binding:"required"`
 		DestinationAddress string  `json:"destination_address" binding:"required"`
+		IsDemo             bool    `json:"is_demo"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
-		return
-	}
-	if req.Amount <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Amount must be positive"})
 		return
 	}
 	if req.Amount <= 0 {
@@ -50,10 +47,17 @@ func WithdrawBalance(c *gin.Context) {
 	}
 
 	if err := db.RunBalanceTransaction(c.Request.Context(), email, func(balance *models.Balance) error {
-		if balance.Naira < req.Amount {
-			return fmt.Errorf("insufficient balance: available=%.2f requested=%.2f", balance.Naira, req.Amount)
+		if req.IsDemo {
+			if balance.DemoNaira < req.Amount {
+				return fmt.Errorf("insufficient demo balance: available=%.2f requested=%.2f", balance.DemoNaira, req.Amount)
+			}
+			balance.DemoNaira -= req.Amount
+		} else {
+			if balance.Naira < req.Amount {
+				return fmt.Errorf("insufficient balance: available=%.2f requested=%.2f", balance.Naira, req.Amount)
+			}
+			balance.Naira -= req.Amount
 		}
-		balance.Naira -= req.Amount
 		return nil
 	}); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -66,12 +70,16 @@ func WithdrawBalance(c *gin.Context) {
 
 		reverse := func() {
 			db.RunBalanceTransaction(context.Background(), email, func(b *models.Balance) error {
-				b.Naira += req.Amount
+				if req.IsDemo {
+					b.DemoNaira += req.Amount
+				} else {
+					b.Naira += req.Amount
+				}
 				return nil
 			})
 		}
 
-		sig, err := markets.WithdrawFunds(bgCtx, req.DestinationAddress, netPayout)
+		sig, err := markets.WithdrawFunds(bgCtx, req.DestinationAddress, netPayout, req.IsDemo)
 		if err != nil {
 			log.Printf("[Withdraw] Private payment failed for %s to %s: %v — reversing deduction", email, req.DestinationAddress, err)
 			reverse()
@@ -190,10 +198,8 @@ func SyncBalance(c *gin.Context) {
 		log.Printf("[SyncBalance] SPL balance fetch partial error for %s: %v", wallet.SolPublicKey, splErr)
 	}
 
-	if usdc > 0 {
-		if err = db.SetBalance(c.Request.Context(), email.(string), "demo_usdc_sol", usdc); err != nil {
-			log.Printf("[SyncBalance] Failed to update USDC balance: %v", err)
-		}
+	if err = db.SetBalance(c.Request.Context(), email.(string), "demo_usdc_sol", usdc); err != nil {
+		log.Printf("[SyncBalance] Failed to update USDC balance: %v", err)
 	}
 
 	if usdt > 0 {
@@ -270,6 +276,7 @@ func SellAsset(c *gin.Context) {
 	}
 
 	grossReceiveNaira := services.GetAssetToNaira(req.Asset, req.Amount)
+
 	sellChain := chainFromAsset(req.Asset)
 	sellRate := feeRateForSell(req.Asset)
 	netReceiveNaira, feeAmount := applyFee(grossReceiveNaira, sellRate)
@@ -454,6 +461,10 @@ func assetBalance(b *models.Balance, asset string) float64 {
 		return b.ETHBase
 	case "usdc_base":
 		return b.USDCBase
+	case "demo_sol":
+		return b.DemoSol
+	case "demo_usdc_sol":
+		return b.DemoUSDCSol
 	default:
 		return 0
 	}
@@ -515,7 +526,7 @@ func WithdrawAsset(c *gin.Context) {
 		}
 		currentBalance = assetBalance(balance, req.Asset)
 		if currentBalance == 0 && assetBalance(balance, req.Asset) == 0 {
-			supported := map[string]bool{"sol": true, "usdc_sol": true, "usdt_sol": true, "usdg_sol": true, "pusd_sol": true, "eth_base": true, "usdc_base": true}
+			supported := map[string]bool{"sol": true, "usdc_sol": true, "usdt_sol": true, "usdg_sol": true, "pusd_sol": true, "eth_base": true, "usdc_base": true, "demo_sol": true, "demo_usdc_sol": true}
 			if !supported[req.Asset] {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "Unsupported asset"})
 				return
@@ -552,7 +563,7 @@ func WithdrawAsset(c *gin.Context) {
 		var txErr error
 
 		switch req.Asset {
-		case "sol":
+		case "sol", "demo_sol":
 			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
 			if err != nil {
 				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)
@@ -560,7 +571,7 @@ func WithdrawAsset(c *gin.Context) {
 				return
 			}
 			txHash, txErr = services.TransferSol(decPriv, req.DestinationAddress, netAmount)
-		case "usdc_sol", "usdt_sol", "usdg_sol", "pusd_sol", "wsol":
+		case "usdc_sol", "demo_usdc_sol", "usdt_sol", "usdg_sol", "pusd_sol", "wsol":
 			decPriv, err := services.Decrypt(wallet.SolPrivateKey)
 			if err != nil {
 				log.Printf("[WithdrawAsset] decrypt failed %s: %v", email, err)
