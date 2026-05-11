@@ -4,48 +4,42 @@ This service acts as the central execution backbone for Vantic prediction market
 
 ## API Documentation and Health Checks
 
-API Documentation: https://vcs-api.vantic.xyz/docs
-Core Service Health: https://vcs-api.vantic.xyz/health
+The core service exposes a comprehensive suite of authenticated and public endpoints.
 
-## Core Service Architecture
+- API Documentation: https://vcs-api.vantic.xyz/docs
+- Core Health: https://vcs-api.vantic.xyz/health
 
-The core service is built with Go, PostgreSQL, and Redis to achieve low latency and strong data consistency. It uses a decoupled architecture where read heavy operations for market discovery and orderbook states are separated from state mutation paths. 
+## Technical Design and Orderbook Math
 
-Load is managed through bounded worker channels and background synchronization patterns that prevent database bottlenecks during bursty trading periods. The system is designed to absorb sudden spikes in trading activity by utilizing an in-memory execution model where the matching engine operates rapidly over active market books, flushing critical state changes asynchronously to PostgreSQL for durability. Redis acts as a fast caching layer and pub/sub broker. WebSocket fan out is heavily optimized to keep clients updated with real-time price and balance changes, effectively eliminating polling pressure on the core REST endpoints.
+The core service is built with Go, PostgreSQL, and Redis to achieve low latency and strong data consistency. It uses an advanced in-memory matching engine that operates on an orderbook fusion model. Instead of maintaining isolated books for YES and NO outcomes, the engine mathematically links them so that the sum of the prices always equals 1.0. A bid for NO at 0.40 is automatically interpreted as an ask for YES at 0.60, creating deep, synthetic liquidity that significantly reduces spreads for traders.
 
-## Orderbook Design and Execution Math
+Load is managed through bounded worker channels and asynchronous synchronization patterns that prevent database bottlenecks during bursty trading periods. The matching engine processes trades in-memory for maximum performance and flushes state changes to PostgreSQL for durability. Market orders calculate execution costs by iteratively sweeping the fused book across direct and complementary levels, while limit orders reserve quote balances based on the exact price and quantity. This architecture ensures that every share held by a user is fully collateralized, guaranteeing that the system can always pay out exactly 1.0 unit of the quote currency per winning share.
 
-The matching engine employs an in-memory orderbook hub that handles side-aware depth and strict price-time priority execution. The orderbook tracks YES and NO-sided liquidity independently, maintaining a spread and computing executable depth in real-time. 
+## Settlement and Role in the Vantic System
 
-When a user places an order, the system differentiates between limit and market executions. Limit orders reserve quote balances directly by locking exact funds (price * quantity). Market orders calculate expected execution costs iteratively; the engine traverses the orderbook depth, sweeping through available asks level by level, to estimate the precise spend required to fill the requested volume. This math ensures that users never overcommit funds and that slippage is accurately modeled before execution. Risk controls enforce these balance locks and liquidity bounds strictly before entering execution paths, minimizing downstream failures and ensuring that partial fills maintain precise accounting correctness.
-
-## Settlement Mechanics
-
-Settlement in Vantic is fully deterministic and mathematically transparent. When a market expires and the underlying data provider (e.g., Coinbase) confirms the target price, the backend calculates the outcome. 
-
-Winning positions are transitioned at fixed payout multipliers (e.g., a 1.9x payout rate for correct predictions, accounting for the house edge), and balances are credited immediately. Losers' funds are retained. Following the off-chain balance updates, the core service constructs a cryptographic settlement message (including the end price, the outcome, and a secure Ed25519 signature). This payload is then broadcast to the Solana blockchain, acting as an immutable settlement log. This dual-layer approach guarantees that fast, frictionless payouts occur off-chain, while the cryptographic proof on-chain ensures absolute transparency and exact accounting precision.
+Settlement is binary and deterministic, localized entirely within the core service for speed and precision. When a market is resolved via a verified data provider, the engine calculates payouts based on a fixed 1.0 unit value for winning shares and 0 for losing ones. Balances are credited immediately to user accounts within the custodial system. The core service then constructs a cryptographic settlement proof and broadcasts it to the Solana blockchain. This design makes the core service the primary system of record, while the on-chain layer provides a transparent audit trail for user verification.
 
 ## Vantic System Components
 
-The Vantic ecosystem relies on several interconnected services to deliver a complete prediction market experience.
+The Vantic ecosystem consists of several specialized services that communicate through controlled API boundaries and high-speed messaging.
 
 ### Frontend Application
 Repository: https://github.com/davidnzube101/vant-fe
-The frontend is built with **Next.js, React, and TypeScript**, styled with Tailwind CSS. It provides the user interface for market discovery, wallet management, and real-time trading. It integrates directly with the core service via REST for authentication and state changes, and utilizes WebSocket connections for live orderbook updates.
+The frontend is built with Next.js, React, and TypeScript to provide a seamless user interface for trading and wallet management. It communicates with the core service via REST for state changes and uses WebSocket connections for live orderbook and balance updates.
 
 ### Indexer Service
 Repository: https://github.com/vant-xyz/indexer
-URL: https://indexer-core.vantic.xyz
-Health: https://indexer-core.vantic.xyz/health
-The indexer is a specialized service built in **Rust** that monitors the Solana and Base networks for incoming deposits to Vant user wallets. It subscribes to on-chain WebSocket RPC streams and issues real-time callbacks to the core Go backend to finalize funding operations. This asynchronous flow allows the core service to recognize external capital without maintaining heavy RPC node connections itself.
+URL: indexer-core.vantic.xyz
+Health: indexer-core.vantic.xyz/health
+The indexer is a high-performance Rust service that monitors the Solana and Base networks for incoming deposits to Vant user wallets. It provides a whitelist endpoint for the core service to register new custodial addresses and issues real-time callbacks to the backend when funding events are detected.
 
 ### Vantic Auxiliary Service (VAS)
 Repository: https://github.com/vant-xyz/backend-auxiliary
-URL: https://vas-api.vantic.xyz
-Health: https://vas-api.vantic.xyz/health
-The auxiliary service is built with **NestJS and TypeScript**. It handles non-execution responsibilities such as transactional email delivery (waitlists, transaction notifications) and ecosystem health monitoring. It communicates with the core backend through internal APIs and shared infrastructure to manage user notifications and administrative alerts asynchronously.
+URL: vas-api.vantic.xyz
+Health: vas-api.vantic.xyz/health
+The auxiliary service is built with NestJS and TypeScript to handle non-critical ecosystem tasks such as transactional email delivery and health monitoring. It integrates with the core service through internal APIs to dispatch notifications for waitlists and completed trades.
 
 ### Smart Contract
 Repository: https://github.com/vant-xyz/contract
-Address: `2ffqwm4YARP7DVFT3Wz2UuWzCpAPNid7L1FdrJzt5sxg`
-The smart contract is a native **Rust** program running on **MagicBlock Ephemeral Rollups** to provide high-performance cryptographic proof of fair market resolution. It acts as an immutable settlement log where the core Go backend posts signed resolution outcomes. The program verifies Ed25519 signatures on-chain via the instructions sysvar and utilizes delegation/undelegation patterns for optimized transaction processing. It does not hold funds, serving entirely as a transparent audit layer.
+Address: 2ffqwm4YARP7DVFT3Wz2UuWzCpAPNid7L1FdrJzt5sxg
+The smart contract is a native Rust program on Solana that runs on MagicBlock Ephemeral Rollups to serve as an immutable settlement log. The core service posts signed resolution outcomes to the contract, which verifies Ed25519 signatures on-chain to provide users with cryptographic proof of fair market resolution.
