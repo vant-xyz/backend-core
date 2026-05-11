@@ -329,6 +329,13 @@ func DumpWalletToUSDC(ctx context.Context, taker solana.PrivateKey) ([]SwapResul
 			results = append(results, SwapResult{Asset: asset.ticker, Amount: balFloat, Error: swapErr.Error()})
 			continue
 		}
+
+		_ = SendRebalanceEmail(SendRebalanceNotificationRequest{
+			Asset:  asset.ticker,
+			Amount: balFloat,
+			TxHash: txHash,
+		})
+
 		results = append(results, SwapResult{Asset: asset.ticker, Amount: balFloat, TxHash: txHash})
 	}
 
