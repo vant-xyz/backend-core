@@ -41,7 +41,7 @@ func ClosePosition(c *gin.Context) {
 		Shares:     req.Shares,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 

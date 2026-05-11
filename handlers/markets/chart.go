@@ -125,7 +125,7 @@ func ReserveMarketQuote(c *gin.Context) {
 
 	quote, err := marketsvc.CreateExecutableQuote(c.Request.Context(), marketID, userEmail, side, req.Stake)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 
@@ -161,7 +161,7 @@ func AcceptMarketQuote(c *gin.Context) {
 		IsDemo:    req.IsDemo,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 

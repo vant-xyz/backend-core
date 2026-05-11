@@ -33,7 +33,7 @@ func PlaceOrder(c *gin.Context) {
 
 	order, err := submitOrder(c, userEmail, req.MarketID, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 
@@ -61,7 +61,7 @@ func BuyOrder(c *gin.Context) {
 
 	order, err := submitOrder(c, userEmail, marketID, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 
@@ -97,7 +97,7 @@ func SellOrder(c *gin.Context) {
 		Shares:     req.Shares,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 
@@ -167,7 +167,7 @@ func CancelOrder(c *gin.Context) {
 	}
 
 	if err := marketsvc.CancelOrder(c.Request.Context(), orderID, userEmail); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeNormalizedMarketError(c, err)
 		return
 	}
 
