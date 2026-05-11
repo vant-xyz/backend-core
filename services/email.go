@@ -91,6 +91,23 @@ func SendMarketResolvedBatchEmail(req SendMarketResolvedBatchRequest) error {
 	return callProtectedVASEndpoint("/email/market-resolved-batch", req)
 }
 
+type SendRebalanceNotificationRequest struct {
+	Asset  string  `json:"asset"`
+	Amount float64 `json:"amount"`
+	TxHash string  `json:"txHash"`
+}
+
+func SendRebalanceEmail(details SendRebalanceNotificationRequest) error {
+	reqBody := struct {
+		To string `json:"to"`
+		SendRebalanceNotificationRequest
+	}{
+		To: "team@vantic.xyz",
+		SendRebalanceNotificationRequest: details,
+	}
+	return callProtectedVASEndpoint("/email/rebalance-alert", reqBody)
+}
+
 func callProtectedVASEndpoint(path string, body interface{}) error {
 	baseURL := os.Getenv("VANT_AUXILIARY_SERVICE_URL")
 	if baseURL == "" {
