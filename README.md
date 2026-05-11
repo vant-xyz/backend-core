@@ -1,66 +1,51 @@
-# Vantic Core Service (`/be`)
+# Vantic Core Service
 
-This service is the core backend for Vantic markets and trading. It exposes authenticated and public APIs, manages balances and orders, coordinates settlement, and acts as the system-of-record API consumed by web and auxiliary services. It also provides real-time streams over WebSocket for prices, orderbook activity, and balance updates.
+This service acts as the central execution backbone for Vantic prediction markets. It is responsible for order matching, risk evaluation, position management, and deterministic settlement. It provides robust HTTP and WebSocket interfaces to support high throughput trading operations and acts as the system of record for all market states.
 
-## API and Health
+## API Documentation and Health Checks
 
-- API docs: https://vcs-api.vantic.xyz/docs
-- Health: `GET /health` on `https://vcs-api.vantic.xyz/health`
+API Documentation: https://vcs-api.vantic.xyz/docs
+Core Service Health: https://vcs-api.vantic.xyz/health
 
-## Core Service Deep Dive
+## Core Service Architecture
 
-The core service is implemented in Go with Gin and PostgreSQL, with Redis used for low-latency order state and matching flow support. Order placement paths validate market status, price/quantity constraints, risk boundaries, and balance lock requirements before entering matching and persistence workflows. The matching subsystem maintains market books with side-aware depth and fill handling, while balances are guarded through lock, unlock, and credit semantics to preserve accounting correctness during partial and complete fills. Settlement logic finalizes outcomes, computes payouts deterministically, updates position state, credits winners, and exposes onchain-verifiable references for auditability.
+The core service is built with Go, PostgreSQL, and Redis to achieve low latency and strong data consistency. It uses a decoupled architecture where read heavy operations for market discovery and orderbook states are separated from state mutation paths. 
 
-From a load perspective, the service separates read-heavy market/orderbook access from state mutation paths, uses background sync patterns for database durability, and relies on bounded channel/worker style flows in market hubs and matching components. WebSocket fan-out reduces polling pressure and keeps clients synchronized with near-real-time balance and market changes. Risk and liquidity controls are enforced before execution to reduce downstream failure churn and preserve predictable behavior under bursty traffic. The architecture is designed so critical trading rules live in one place, while external services integrate through clear HTTP boundaries.
+Load is managed through bounded worker channels and background synchronization patterns that prevent database bottlenecks during bursty trading periods. The system is designed to absorb sudden spikes in trading activity by utilizing an in-memory execution model where the matching engine operates rapidly over active market books, flushing critical state changes asynchronously to PostgreSQL for durability. Redis acts as a fast caching layer and pub/sub broker. WebSocket fan out is heavily optimized to keep clients updated with real-time price and balance changes, effectively eliminating polling pressure on the core REST endpoints.
 
-## Orderbook and Math Model
+## Orderbook Design and Execution Math
 
-The orderbook tracks YES/NO-sided liquidity and computes executable depth by price-time priority. Market order cost estimation iterates asks to calculate expected spend based on available levels, while limit orders reserve quote balances directly from `price * quantity`. Fill paths update filled quantity, remaining quantity, and position average entry cost, then settle user-level PnL through payout and realized accounting fields. In binary resolution, winning positions settle at fixed payout-per-share semantics, which keeps settlement math transparent and easy to verify.
+The matching engine employs an in-memory orderbook hub that handles side-aware depth and strict price-time priority execution. The orderbook tracks YES and NO-sided liquidity independently, maintaining a spread and computing executable depth in real-time. 
 
-## Role in the Vantic System
+When a user places an order, the system differentiates between limit and market executions. Limit orders reserve quote balances directly by locking exact funds (price * quantity). Market orders calculate expected execution costs iteratively; the engine traverses the orderbook depth, sweeping through available asks level by level, to estimate the precise spend required to fill the requested volume. This math ensures that users never overcommit funds and that slippage is accurately modeled before execution. Risk controls enforce these balance locks and liquidity bounds strictly before entering execution paths, minimizing downstream failures and ensuring that partial fills maintain precise accounting correctness.
 
-This service is the trading and market execution backbone for Vantic. Frontend clients use it for auth, market discovery, order placement, position management, and websocket updates. Admin and automation flows use it to create markets, trigger sync, and execute settlement. Indexer and auxiliary services consume and contribute data/events through controlled integration endpoints and keys.
+## Settlement Mechanics
 
-## Service Map and Integrations
+Settlement in Vantic is fully deterministic and mathematically transparent. When a market expires and the underlying data provider (e.g., Coinbase) confirms the target price, the backend calculates the outcome. 
 
-### Frontend (`vant-fe`)
-- Repo: https://github.com/davidnzube101/vant-fe
-- Language: TypeScript (Next.js/React)
-- Role: User-facing web app for trading, market views, wallet/account UX, and real-time subscriptions.
-- Integration: Calls this core service over REST and WebSocket using auth tokens and API proxy routes.
+Winning positions are transitioned at fixed payout multipliers (e.g., a 1.9x payout rate for correct predictions, accounting for the house edge), and balances are credited immediately. Losers' funds are retained. Following the off-chain balance updates, the core service constructs a cryptographic settlement message (including the end price, the outcome, and a secure Ed25519 signature). This payload is then broadcast to the Solana blockchain, acting as an immutable settlement log. This dual-layer approach guarantees that fast, frictionless payouts occur off-chain, while the cryptographic proof on-chain ensures absolute transparency and exact accounting precision.
 
-### Indexer (`indexer`)
-- Repo: https://github.com/vant-xyz/indexer
-- URL: https://indexer-core.vantic.xyz
-- Health: `GET /health` on `https://indexer-core.vantic.xyz/health`
-- Language: Go
-- Role: Tracks onchain state and supports indexed views required by Vantic market operations.
-- Integration: The core service notifies/queries indexer-facing paths for wallet and market-related workflows.
+## Vantic System Components
 
-### VAS (`backend-auxiliary`)
-- Repo: https://github.com/vant-xyz/backend-auxiliary
-- URL: https://vas-api.vantic.xyz
-- Health: `GET /health` on `https://vas-api.vantic.xyz/health`
-- Language: Go
-- Role: Auxiliary backend features and background service responsibilities outside core execution.
-- Integration: Communicates with the core API and shared infrastructure to support non-matching critical paths.
+The Vantic ecosystem relies on several interconnected services to deliver a complete prediction market experience.
 
-### Contract (`contract`)
-- Repo: https://github.com/vant-xyz/contract
-- Language: Rust/Anchor (onchain programs)
-- Role: Onchain market primitives and settlement-verifiable state transitions.
-- Integration: Core service orchestrates market lifecycle around contract interactions and stores resulting tx metadata.
-- Contract address: See the contract repository README for the canonical deployed address.
+### Frontend Application
+Repository: https://github.com/davidnzube101/vant-fe
+The frontend is built with **Next.js, React, and TypeScript**, styled with Tailwind CSS. It provides the user interface for market discovery, wallet management, and real-time trading. It integrates directly with the core service via REST for authentication and state changes, and utilizes WebSocket connections for live orderbook updates.
 
-## Project Layout (`/be`)
+### Indexer Service
+Repository: https://github.com/vant-xyz/indexer
+URL: https://indexer-core.vantic.xyz
+Health: https://indexer-core.vantic.xyz/health
+The indexer is a specialized service built in **Rust** that monitors the Solana and Base networks for incoming deposits to Vant user wallets. It subscribes to on-chain WebSocket RPC streams and issues real-time callbacks to the core Go backend to finalize funding operations. This asynchronous flow allows the core service to recognize external capital without maintaining heavy RPC node connections itself.
 
-- `main.go`: service bootstrap, routing, middleware, lifecycle wiring.
-- `handlers/`: HTTP layer and request/response contracts.
-- `services/`: business logic for markets, auth, balances, settlement, integrations.
-- `db/`: queries, migrations, and persistence abstractions.
-- `models/`: typed domain models and JSON schema shapes.
-- `docs/swagger.yaml`: API specification source.
+### Vantic Auxiliary Service (VAS)
+Repository: https://github.com/vant-xyz/backend-auxiliary
+URL: https://vas-api.vantic.xyz
+Health: https://vas-api.vantic.xyz/health
+The auxiliary service is built with **NestJS and TypeScript**. It handles non-execution responsibilities such as transactional email delivery (waitlists, transaction notifications) and ecosystem health monitoring. It communicates with the core backend through internal APIs and shared infrastructure to manage user notifications and administrative alerts asynchronously.
 
-## Private Repository Notice
-
-This repository is private Vantic business code. Access is for approved collaboration and review only, including hackathon evaluators invited by the Vantic team. No reuse rights are granted outside the custom license in this directory.
+### Smart Contract
+Repository: https://github.com/vant-xyz/contract
+Address: `2ffqwm4YARP7DVFT3Wz2UuWzCpAPNid7L1FdrJzt5sxg`
+The smart contract is a native **Rust** program running on **MagicBlock Ephemeral Rollups** to provide high-performance cryptographic proof of fair market resolution. It acts as an immutable settlement log where the core Go backend posts signed resolution outcomes. The program verifies Ed25519 signatures on-chain via the instructions sysvar and utilizes delegation/undelegation patterns for optimized transaction processing. It does not hold funds, serving entirely as a transparent audit layer.

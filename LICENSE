@@ -1,35 +1,9 @@
-Vantic Private Source License v1.0
-Copyright (c) 2026 Vantic
-All rights reserved.
+VANTIC PROPRIETARY LICENSE
 
-1. Scope
-This software, source code, configuration, documentation, and related materials in this repository are proprietary and confidential to Vantic.
+Copyright (c) 2026 Vantic. All rights reserved.
 
-2. No License Grant for Use
-No right is granted to use, copy, modify, merge, publish, distribute, sublicense, sell, deploy, or create derivative works from this codebase, in whole or in part, except as explicitly authorized in writing by Vantic.
+This repository and all contained source code are the proprietary and confidential property of Vantic. This is closed business code and a strictly private repository.
 
-3. Limited Review Permission
-Authorized reviewers, including hackathon evaluators invited by Vantic, are granted a limited, revocable, non-transferable permission to view this repository solely for evaluation and review of Vantic.
+No individual, organization, or entity is permitted to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of this software, or any portion thereof, without the express written permission of Vantic.
 
-4. Prohibited Actions
-Without prior written permission from Vantic, you may not:
-- run this code in production or commercial environments;
-- copy code or architecture into other projects;
-- redistribute any part of this repository;
-- disclose non-public implementation details;
-- train or fine-tune models on this code or documentation.
-
-5. Ownership
-Vantic retains all intellectual property rights, title, and interest in and to this software and all derivative concepts and implementations.
-
-6. Confidentiality
-Access to this repository does not transfer any public disclosure rights. Non-public materials must be treated as confidential business information.
-
-7. Termination
-Any breach of this license or any unauthorized use terminates all permissions immediately. Upon termination, all local copies must be deleted unless retention is required by law.
-
-8. Warranty and Liability
-This software is provided "as is", without warranty of any kind. Vantic is not liable for any claim, damages, or other liability arising from use or inability to use this software.
-
-9. Contact
-For licensing requests, permissions, or commercial use inquiries, contact Vantic directly.
+Access to this repository is granted on a strictly view-only basis for the sole purpose of hackathon evaluation and technical review. Reviewers and invited hackathon participants are authorized only to inspect the code to assess its technical implementation. No other rights are granted or implied.
