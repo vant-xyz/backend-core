@@ -1,57 +1,70 @@
 # Jupiter Developer Experience Report: Vantic Treasury Rebalancing Engine
 
-**Submitted by:** David [Lead Dev/Co-Founder, Vantic]
-**Developer Email:** david.nzube.official22@gmail.com
+**Submitted by:** David (Lead Dev / Co-Founder, Vantic)
+
+**Email:** david.nzube.official22@gmail.com
+
 **Date:** May 11, 2026
+
 **Project:** Vantic Autonomous Treasury Rebalancing Engine
+
+**Sidetrack Pitch Video:** https://youtu.be/dCsqiyP7txk?si=IAQE3fIkKJi-iJLO
 
 ---
 
 ## 1. Project Overview
-Vantic is a high-performance prediction market protocol on Solana, utilizing MagicBlock Ephemeral Rollups. We manage a multi-asset treasury containing volatile (SOL, ETH) and stable (USDC, USDT, PUSD) assets without manual intervention.
 
-To solve this, we implemented an **Autonomous Rebalancing Engine** (within `be/services/jupiter.go`) in our Go backend. We integrated:
-- **Jupiter Price V3 API:** Used as the ground truth for valuing all volatile holdings in real-time.
-- **Jupiter Swap V2 (`/swap/v2/quote`):** Used to autonomously trigger swaps when volatile asset holdings exceed a configurable USD threshold (set via `VANTIC_DUMP_THRESHOLD_USD`).
+Vantic is a prediction market protocol on Solana, built on MagicBlock Ephemeral Rollups. Our treasury holds a mix of volatile assets (SOL, ETH) and stablecoins (USDC, USDT, USDG, PUSD), and we needed it to rebalance automatically without anyone manually stepping in.
 
-This integration transforms our treasury from a passive holding tank into an autonomous, risk-aware rebalancing machine that protects protocol liquidity and user settlements.
+The solution lives in `services/jupiter.go`, a rebalancing engine in our Go backend powered by two Jupiter APIs:
 
-![Treasury Balance State](media/JDP_Dashboard.png)
-*Figure 1: Jupiter Developer Platform dashboard showing overall metrics from the Swap and Price APIs.*
+- **Jupiter Price V3** -- our source of truth for pricing volatile holdings in real time.
+- **Jupiter Swap V2** (`/swap/v2/quote`) -- what triggers a swap when a volatile asset crosses the threshold.
 
-![Autonomous Swap Flow](media/JDP_Dashboard_Prices.png)
-*Figure 2: Jupiter Developer Platform analytics for the Price API endpoint.*
+The result is a treasury that actively protects protocol liquidity and user settlements, rather than passively holding assets.
 
 ---
 
 ## 2. DX Report Questions
 
-### How was onboarding? 
-The onboarding process was seamless. The transition from the legacy organization structure was handled cleanly, and the migration path felt professional.
-- **Friction Point:** I experienced a minor issue connecting my GitHub account during authentication, necessitating a fallback to `david.nzube.official22@gmail.com`. Streamlining third-party OAuth providers would improve initial velocity.
+### How was onboarding?
 
-### What's broken or missing in the docs?
-- **Missing OpenAPI Spec:** The most significant gap is the lack of a downloadable OpenAPI/Swagger spec (YAML/JSON). We heavily rely on these for type-safety and client generation in our Go backend. Manually mapping endpoints is prone to error and time-consuming.
-- **Content Gaps:** The documentation is excellent at a high level but lacks deep-dive integration patterns for backend-heavy workflows.
+Generally smooth. The migration away from the old org structure was clean and the path forward felt deliberate. One thing did trip me up early: a GitHub OAuth issue during authentication forced a fallback to email login. Not a blocker, but tightening that flow would spare developers an unnecessary headache at the start.
+
+### What is broken or missing in the docs?
+
+The biggest gap is a downloadable OpenAPI/Swagger spec. For Go backends, machine-readable specs are not a nice-to-have -- they are how we generate clients and enforce type safety. Without one, you are stuck manually mapping endpoints, which is slow and error-prone. That gap alone probably cost us hours we did not need to lose.
+
+The high-level docs are solid, but there is very little for teams running backend-heavy workflows. More real-world integration patterns for that use case would go a long way.
 
 ### Where did the APIs bite you?
-- **Price API Latency:** Initial integration with the Price V3 endpoint experienced severe latency when accessed from local infrastructure. We identified that our local ISP was intermittently blocking requests to the Jupiter endpoint. 
-- **Recommendation:** Jupiter should consider routing these requests via Cloudflare or providing globally distributed edge nodes to ensure reliability for developers testing locally or running on varied VPS infrastructure.
+
+The Price V3 endpoint gave us bad latency early on that we could not immediately explain. We eventually traced it to our local ISP intermittently blocking requests to the Jupiter endpoint. Not Jupiter's fault, but it points to a real infrastructure concern. Routing through Cloudflare or offering globally distributed edge nodes would make a meaningful difference for developers testing locally or running on mixed VPS infrastructure.
 
 ### Did you use the AI stack?
-- **Docs MCP:** The experience was seamless and highly productive. It is a powerful tool for agents that cannot traverse the filesystem, and I encountered no issues here—it was the highlight of the integration process.
-- **Integrated Docs AI:** At points, the chat-based docs AI hallucinated API parameters or endpoint behavior. It appears to lack deep "product context" and relies too heavily on generic patterns. It needs to be tuned to the actual live state of the Jupiter API.
+
+The Docs MCP was the highlight of the whole integration. It just worked, and it is genuinely well-suited for agents that cannot traverse the filesystem.
+
+The in-chat Docs AI was a different story. It hallucinated API parameters and endpoint behavior more than once. It felt like it was pattern-matching off generic knowledge rather than the actual live Jupiter API. It needs to be grounded in what the API does today, not what a language model expects APIs to look like.
 
 ---
 
-## 3. The "What I Wish Existed" & Rebuild Strategy
+## 3. What I Wish Existed and How I Would Rebuild the Platform
 
 ### What I wish existed
-1. **Machine-Readable Specs:** Standard OpenAPI/JSON specs are non-negotiable for serious engineering teams to ensure fast, safe integration.
-2. **SDK Support:** While raw API calls work, official, well-maintained Go SDKs for Swap V2/Price V3 would be a massive productivity multiplier.
 
-### How I would rebuild the Developer Platform
-1. **Spec-First:** The developer platform should be generated from a single, canonical OpenAPI spec that is updated in CI/CD. Providing this as a downloadable artifact should be the first call-to-action on the dashboard.
-2. **"Production-Ready" Local Testing:** Provide a standardized local test-net shim or a mock-server that emulates Jupiter's API behavior. This eliminates ISP/latency issues during development and allows for deterministic unit testing of our treasury rebalancing logic.
-3. **Contextual AI:** The Docs AI needs a RAG implementation that is strictly constrained to the canonical API documentation. If the AI cannot find a specific answer in the docs, it should direct the developer to a human-staffed Discord or GitHub issue, rather than guessing.
-4. **Visibility/Analytics:** Give us a "Project-Level Dashboard" that shows exactly how our backend is hitting your APIs—latency logs, error rates, and quota usage. Seeing where our triggers are failing (e.g., 429s or latency spikes) would allow us to optimize our rebalancing engine on the fly.
+**Machine-readable specs.** An OpenAPI/JSON spec is the baseline for serious engineering teams. Without it, integration is slower and more fragile than it needs to be.
+
+**A Go SDK.** Raw API calls work, but an official maintained SDK for Swap V2 and Price V3 would meaningfully cut integration time and reduce the surface area for mistakes. I'm building this.
+
+### How I would rebuild the developer platform
+
+**Start with the spec.** Generate the entire platform from a single canonical OpenAPI spec, updated in CI/CD. Make it the first download on the doc. Everything else flows from that.
+
+**Provide a real local testing setup.** A mock server or local testnet shim emulating Jupiter's API behavior would eliminate the ISP and latency issues during development entirely. It would also allow deterministic unit tests for our rebalancing logic, which right now we cannot write cleanly.
+
+**Fix the AI with RAG.** Constrain the Docs AI strictly to the canonical documentation. If it cannot find an answer, it should say so and point the developer to Discord or a GitHub issue, not produce a confident guess. A wrong answer costs more time than no answer.
+
+---
+
+Thank You
