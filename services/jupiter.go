@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -270,9 +271,27 @@ func DumpWalletToUSDC(ctx context.Context, taker solana.PrivateKey) ([]SwapResul
 		return nil, fmt.Errorf("MAINNET_SOLANA_RPC_URL not configured")
 	}
 
+	thresholdStr := os.Getenv("VANTIC_DUMP_THRESHOLD_USD")
+	thresholdUSD := 500.0
+	if thresholdStr != "" {
+		if val, err := strconv.ParseFloat(thresholdStr, 64); err == nil {
+			thresholdUSD = val
+		}
+	}
+
 	pubKey := taker.PublicKey().String()
 	assets := getDumpableAssets()
 	results := make([]SwapResult, 0, len(assets))
+
+	var tickers []string
+	for _, asset := range assets {
+		tickers = append(tickers, asset.ticker)
+	}
+
+	prices, err := GetTokenPrices(tickers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch token prices: %w", err)
+	}
 
 	for _, asset := range assets {
 		var balFloat float64
@@ -286,6 +305,16 @@ func DumpWalletToUSDC(ctx context.Context, taker solana.PrivateKey) ([]SwapResul
 
 		if fetchErr != nil {
 			results = append(results, SwapResult{Asset: asset.ticker, Error: fetchErr.Error()})
+			continue
+		}
+
+		priceUSD := prices[asset.ticker]
+		if priceUSD == 0 {
+			continue
+		}
+
+		valueUSD := balFloat * priceUSD
+		if valueUSD < thresholdUSD {
 			continue
 		}
 
