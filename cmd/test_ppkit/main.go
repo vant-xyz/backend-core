@@ -29,6 +29,9 @@ type apiReq struct {
 	ToBalance   string `json:"toBalance"`
 	Visibility  string `json:"visibility"`
 	Cluster     string `json:"cluster,omitempty"`
+	MinDelayMs  string `json:"minDelayMs"`
+	MaxDelayMs  string `json:"maxDelayMs"`
+	Split       int    `json:"split"`
 }
 
 type apiResp struct {
@@ -93,6 +96,9 @@ func main() {
 		ToBalance:   "base",
 		Visibility:  "private",
 		Cluster:     *cluster,
+		MinDelayMs:  "0",
+		MaxDelayMs:  "0",
+		Split:       1,
 	})
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	httpResp, err := httpClient.Post("https://payments.magicblock.app/v1/spl/transfer", "application/json", bytes.NewReader(body))
@@ -162,10 +168,11 @@ func main() {
 
 func rpcURLsForCluster(cluster string) []string {
 	if cluster == "mainnet" {
+		urls := []string{}
 		if u := os.Getenv("MAINNET_SOLANA_RPC_URL"); u != "" {
-			return []string{u, "https://api.mainnet-beta.solana.com"}
+			urls = append(urls, u)
 		}
-		return []string{"https://api.mainnet-beta.solana.com"}
+		return append(urls, "https://api.mainnet-beta.solana.com")
 	}
 	var urls []string
 	for _, env := range []string{"DEVNET_SOLANA_RPC_URL", "DEVNET_SOLANA_RPC_URL_1", "DEVNET_SOLANA_RPC_URL_2"} {
@@ -173,8 +180,5 @@ func rpcURLsForCluster(cluster string) []string {
 			urls = append(urls, u)
 		}
 	}
-	if len(urls) == 0 {
-		return []string{"https://api.devnet.solana.com"}
-	}
-	return urls
+	return append(urls, "https://api.devnet.solana.com")
 }

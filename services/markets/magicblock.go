@@ -76,6 +76,12 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 	}
 }
 
+var immediateSettlement = []ppkit.TransferOption{
+	ppkit.WithMinDelayMs(0),
+	ppkit.WithMaxDelayMs(0),
+	ppkit.WithSplit(1),
+}
+
 func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64, isDemo bool) (string, error) {
 	settlerKey, err := getSettlerKeypair()
 	if err != nil {
@@ -83,13 +89,13 @@ func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float
 	}
 	c := newPPClient()
 	if isDemo {
-		return c.TransferUSDCDevnet(ctx, []byte(settlerKey), recipientAddress, usdAmount)
+		return c.TransferUSDCDevnet(ctx, []byte(settlerKey), recipientAddress, usdAmount, immediateSettlement...)
 	}
 	mint := os.Getenv("MAINNET_SOL_USDC_MINT")
 	if mint == "" {
 		return "", fmt.Errorf("MAINNET_SOL_USDC_MINT not set")
 	}
-	return c.TransferSPL(ctx, []byte(settlerKey), recipientAddress, mint, usdAmount, 6, "mainnet")
+	return c.TransferSPL(ctx, []byte(settlerKey), recipientAddress, mint, usdAmount, 6, "mainnet", immediateSettlement...)
 }
 
 func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, asset string, amount float64) (string, error) {
@@ -100,5 +106,5 @@ func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.Private
 	if err != nil {
 		return "", err
 	}
-	return newPPClient().TransferSPL(ctx, []byte(payerKeypair), recipientAddress, mint, amount, decimals, clusterForAsset(asset))
+	return newPPClient().TransferSPL(ctx, []byte(payerKeypair), recipientAddress, mint, amount, decimals, clusterForAsset(asset), immediateSettlement...)
 }
