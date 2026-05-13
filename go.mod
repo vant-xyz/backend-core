@@ -3,6 +3,7 @@ module github.com/vant-xyz/backend-code
 go 1.25.4
 
 require (
+	github.com/DavidNzube101/magicblock-pp-kit-go v0.1.0
 	github.com/cloudinary/cloudinary-go/v2 v2.15.0
 	github.com/ethereum/go-ethereum v1.17.1
 	github.com/gagliardetto/solana-go v1.14.0

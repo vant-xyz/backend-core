@@ -1,33 +1,27 @@
 package markets
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"math"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
+	ppkit "github.com/DavidNzube101/magicblock-pp-kit-go"
 	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/rpc"
 )
 
-const privatePaymentsBase = "https://payments.magicblock.app"
+func getEphemeralRPCURL() string {
+	if url := os.Getenv("MAGICBLOCK_EPHEMERAL_RPC_URL"); url != "" {
+		return url
+	}
+	return "https://devnet-eu.magicblock.app"
+}
 
-type privatePaymentReq struct {
-	From        string `json:"from"`
-	To          string `json:"to"`
-	Mint        string `json:"mint"`
-	Amount      uint64 `json:"amount"`
-	FromBalance string `json:"fromBalance"`
-	ToBalance   string `json:"toBalance"`
-	Visibility  string `json:"visibility"`
-	Cluster     string `json:"cluster,omitempty"`
+func newPPClient() *ppkit.Client {
+	return ppkit.New(
+		ppkit.WithEphemeralRPC(getEphemeralRPCURL()),
+		ppkit.WithRPCURLs(getFallbackRPCURLs()),
+	)
 }
 
 func clusterForAsset(asset string) string {
@@ -37,19 +31,11 @@ func clusterForAsset(asset string) string {
 	return "mainnet"
 }
 
-type privatePaymentResp struct {
-	Transaction          string   `json:"transactionBase64"`
-	RequiredSigners      []string `json:"requiredSigners"`
-	SendTo               string   `json:"sendTo"`
-	RecentBlockhash      string   `json:"recentBlockhash"`
-	LastValidBlockHeight uint64   `json:"lastValidBlockHeight"`
-}
-
 func getUSDCMint() string {
 	if mint := os.Getenv("DEVNET_SOL_USDC_MINT"); mint != "" {
 		return mint
 	}
-	return "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+	return ppkit.MintUSDCDevnet
 }
 
 func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
@@ -58,11 +44,7 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 	switch asset {
 	case "usdc_sol", "demo_usdc_sol":
 		if isDemo {
-			m := os.Getenv("DEVNET_SOL_USDC_MINT")
-			if m == "" {
-				m = getUSDCMint()
-			}
-			return m, 6, nil
+			return getUSDCMint(), 6, nil
 		}
 		m := os.Getenv("MAINNET_SOL_USDC_MINT")
 		if m == "" {
@@ -72,13 +54,13 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 	case "usdt_sol":
 		m := os.Getenv("MAINNET_SOL_USDT_MINT")
 		if m == "" {
-			return "", 0, fmt.Errorf("MAINNET_SOL_USDT_MINT not set")
+			return ppkit.MintUSDTMainnet, 6, nil
 		}
 		return m, 6, nil
 	case "usdg_sol":
 		m := os.Getenv("MAINNET_SOL_USDG_MINT")
 		if m == "" {
-			return "", 0, fmt.Errorf("MAINNET_SOL_USDG_MINT not set")
+			return ppkit.MintUSDGMainnet, 6, nil
 		}
 		return m, 6, nil
 	case "pusd_sol":
@@ -94,29 +76,20 @@ func getSPLMintAndDecimalsForPrivate(asset string) (string, uint8, error) {
 	}
 }
 
-func getEphemeralRPCURL() string {
-	if url := os.Getenv("MAGICBLOCK_EPHEMERAL_RPC_URL"); url != "" {
-		return url
-	}
-	return "https://devnet-eu.magicblock.app"
-}
-
 func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64, isDemo bool) (string, error) {
 	settlerKey, err := getSettlerKeypair()
 	if err != nil {
 		return "", fmt.Errorf("settler keypair unavailable: %w", err)
 	}
-	cluster := "mainnet"
-	mint := os.Getenv("MAINNET_SOL_USDC_MINT")
+	c := newPPClient()
 	if isDemo {
-		cluster = "devnet"
-		mint = getUSDCMint()
+		return c.TransferUSDCDevnet(ctx, []byte(settlerKey), recipientAddress, usdAmount)
 	}
+	mint := os.Getenv("MAINNET_SOL_USDC_MINT")
 	if mint == "" {
-		return "", fmt.Errorf("USDC mint not configured for cluster %s", cluster)
+		return "", fmt.Errorf("MAINNET_SOL_USDC_MINT not set")
 	}
-	units := uint64(usdAmount * 1_000_000)
-	return sendPrivateSPLPayment(ctx, settlerKey, recipientAddress, mint, units, cluster)
+	return c.TransferSPL(ctx, []byte(settlerKey), recipientAddress, mint, usdAmount, 6, "mainnet")
 }
 
 func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, asset string, amount float64) (string, error) {
@@ -127,84 +100,5 @@ func SendPrivateSPLAssetPayment(ctx context.Context, payerKeypair solana.Private
 	if err != nil {
 		return "", err
 	}
-	baseUnits := uint64(math.Round(amount * math.Pow10(int(decimals))))
-	if baseUnits == 0 {
-		return "", fmt.Errorf("amount too small")
-	}
-	return sendPrivateSPLPayment(ctx, payerKeypair, recipientAddress, mint, baseUnits, clusterForAsset(asset))
-}
-
-func sendPrivateSPLPayment(ctx context.Context, payerKeypair solana.PrivateKey, recipientAddress, mint string, amount uint64, cluster string) (string, error) {
-	reqBody := privatePaymentReq{
-		From:        payerKeypair.PublicKey().String(),
-		To:          recipientAddress,
-		Mint:        mint,
-		Amount:      amount,
-		FromBalance: "base",
-		ToBalance:   "base",
-		Visibility:  "private",
-		Cluster:     cluster,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshal private payment request: %w", err)
-	}
-
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Post(privatePaymentsBase+"/v1/spl/transfer", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("private payment API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("private payment API %d: %s", resp.StatusCode, string(raw))
-	}
-
-	var payResp privatePaymentResp
-	if err := json.NewDecoder(resp.Body).Decode(&payResp); err != nil {
-		return "", fmt.Errorf("decode private payment response: %w", err)
-	}
-
-	txBytes, err := base64.StdEncoding.DecodeString(payResp.Transaction)
-	if err != nil {
-		return "", fmt.Errorf("decode private payment tx: %w", err)
-	}
-
-	tx, err := solana.TransactionFromBytes(txBytes)
-	if err != nil {
-		return "", fmt.Errorf("parse private payment tx: %w", err)
-	}
-
-	keyMap := map[solana.PublicKey]*solana.PrivateKey{
-		payerKeypair.PublicKey(): &payerKeypair,
-	}
-	if _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey { return keyMap[key] }); err != nil {
-		return "", fmt.Errorf("sign private payment tx: %w", err)
-	}
-
-	var rpcURLs []string
-	if payResp.SendTo == "ephemeral" {
-		rpcURLs = []string{getEphemeralRPCURL()}
-	} else {
-		// sendTo == "base" means submit to standard Solana RPC, not MagicBlock's router
-		rpcURLs = getFallbackRPCURLs()
-	}
-
-	for _, rpcURL := range rpcURLs {
-		sendCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-		rpcClient := rpc.New(rpcURL)
-		sig, sendErr := rpcClient.SendTransactionWithOpts(sendCtx, tx, rpc.TransactionOpts{
-			SkipPreflight: true,
-		})
-		cancel()
-		if sendErr != nil {
-			continue
-		}
-		return sig.String(), nil
-	}
-
-	return "", fmt.Errorf("all RPC endpoints failed for private payment")
+	return newPPClient().TransferSPL(ctx, []byte(payerKeypair), recipientAddress, mint, amount, decimals, clusterForAsset(asset))
 }

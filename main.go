@@ -108,6 +108,8 @@ func main() {
 		internal.POST("/deposit", handlers.HandleInternalDeposit)
 	}
 
+	r.GET("/leaderboard", handlers.GetLeaderboard)
+
 	// ── Markets — public ──────────────────────────────────────────────────────
 	// GET /markets?type=CAPPM&status=active   → crypto tab feed
 	// GET /markets?type=GEM&status=active     → general tab feed
@@ -155,6 +157,7 @@ func main() {
 		auth.POST("/markets/:id/quote", handlersmarkets.ReserveMarketQuote)
 		auth.POST("/markets/:id/quote/accept", handlersmarkets.AcceptMarketQuote)
 		auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
+		auth.GET("/leaderboard/me", handlers.GetMyLeaderboardRank)
 		auth.GET("/orders", handlersmarkets.GetUserOrders)
 		auth.GET("/positions", handlersmarkets.GetUserPositions)
 		auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
