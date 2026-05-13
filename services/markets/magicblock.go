@@ -80,6 +80,8 @@ var immediateSettlement = []ppkit.TransferOption{
 	ppkit.WithMinDelayMs(0),
 	ppkit.WithMaxDelayMs(0),
 	ppkit.WithSplit(1),
+	ppkit.WithInitIfMissing(true),
+	ppkit.WithInitAtasIfMissing(true),
 }
 
 func WithdrawFunds(ctx context.Context, recipientAddress string, usdAmount float64, isDemo bool) (string, error) {
