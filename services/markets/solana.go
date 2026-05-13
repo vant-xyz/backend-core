@@ -108,10 +108,13 @@ func getFallbackRPCURLs() []string {
 		}
 	}
 
-	if len(valid) == 0 {
-		return []string{"https://api.devnet.solana.com"}
+	const publicDevnet = "https://api.devnet.solana.com"
+	for _, u := range valid {
+		if u == publicDevnet {
+			return valid
+		}
 	}
-
+	valid = append(valid, publicDevnet)
 	return valid
 }
 
