@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/db"
@@ -15,7 +16,18 @@ func GetLeaderboard(c *gin.Context) {
 		limit = l
 	}
 
-	entries, err := db.GetLeaderboard(c.Request.Context(), isDemo, limit)
+	var since *time.Time
+	now := time.Now().UTC()
+	switch c.DefaultQuery("period", "all") {
+	case "today":
+		t := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		since = &t
+	case "7d":
+		t := now.Add(-7 * 24 * time.Hour)
+		since = &t
+	}
+
+	entries, err := db.GetLeaderboard(c.Request.Context(), isDemo, limit, since)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load leaderboard"})
 		return

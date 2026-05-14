@@ -20,8 +20,12 @@ type LeaderboardEntry struct {
 	ActivityScore   float64 `json:"activity_score"`
 }
 
-func GetLeaderboard(ctx context.Context, isDemo bool, limit int) ([]LeaderboardEntry, error) {
-	cacheKey := fmt.Sprintf("leaderboard:demo=%v:limit=%d", isDemo, limit)
+func GetLeaderboard(ctx context.Context, isDemo bool, limit int, since *time.Time) ([]LeaderboardEntry, error) {
+	var sinceKey string
+	if since != nil {
+		sinceKey = since.Format(time.RFC3339)
+	}
+	cacheKey := fmt.Sprintf("leaderboard:demo=%v:limit=%d:since=%s", isDemo, limit, sinceKey)
 
 	if RDB != nil {
 		if cached, err := RDB.Get(ctx, cacheKey).Bytes(); err == nil {
@@ -38,30 +42,35 @@ func GetLeaderboard(ctx context.Context, isDemo bool, limit int) ([]LeaderboardE
 			SELECT user_email, COALESCE(SUM(points), 0) AS vantic_points
 			FROM vantic_points_ledger
 			WHERE is_demo = $1
+			  AND ($3::timestamptz IS NULL OR created_at >= $3)
 			GROUP BY user_email
 		),
 		pnl_data AS (
 			SELECT user_email, COALESCE(SUM(realized_pnl), 0) AS total_pnl
 			FROM positions
 			WHERE is_demo = $1 AND status = 'SETTLED'
+			  AND ($3::timestamptz IS NULL OR updated_at >= $3)
 			GROUP BY user_email
 		),
 		trade_data AS (
 			SELECT user_email, COUNT(*) AS trade_count
 			FROM positions
 			WHERE is_demo = $1
+			  AND ($3::timestamptz IS NULL OR created_at >= $3)
 			GROUP BY user_email
 		),
 		deposit_data AS (
 			SELECT user_email, COALESCE(SUM(amount), 0) AS total_deposits
 			FROM transactions
 			WHERE type IN ('deposit', 'faucet')
+			  AND ($3::timestamptz IS NULL OR created_at >= $3)
 			GROUP BY user_email
 		),
 		withdrawal_data AS (
 			SELECT user_email, COALESCE(SUM(amount), 0) AS total_withdrawals
 			FROM transactions
 			WHERE type IN ('withdrawal', 'asset_withdrawal')
+			  AND ($3::timestamptz IS NULL OR created_at >= $3)
 			GROUP BY user_email
 		),
 		raw AS (
@@ -103,7 +112,7 @@ func GetLeaderboard(ctx context.Context, isDemo bool, limit int) ([]LeaderboardE
 		FROM ranked
 		ORDER BY (vantic_points + ROUND((100.0 * (0.25 * pnl_rank + 0.25 * trades_rank + 0.25 * deposits_rank + 0.25 * withdrawals_rank))::numeric, 2)) DESC
 		LIMIT $2
-	`, isDemo, limit)
+	`, isDemo, limit, since)
 	if err != nil {
 		return nil, fmt.Errorf("leaderboard query: %w", err)
 	}
