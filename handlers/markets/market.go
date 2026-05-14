@@ -111,6 +111,43 @@ func GetMarket(c *gin.Context) {
 	})
 }
 
+func GetMarketStats(c *gin.Context) {
+	marketID := c.Param("id")
+	market, err := marketsvc.GetMarketByID(c.Request.Context(), marketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Market not found"})
+		return
+	}
+	stats, err := marketsvc.GetMarketStats(c.Request.Context(), marketID, market.MarketType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to compute stats"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"stats": stats})
+}
+
+func GetMarketHistory(c *gin.Context) {
+	marketID := c.Param("id")
+	market, err := marketsvc.GetMarketByID(c.Request.Context(), marketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Market not found"})
+		return
+	}
+	if market.MarketType != "CAPPM" || market.Asset == "" {
+		c.JSON(http.StatusOK, gin.H{"history": []struct{}{}})
+		return
+	}
+	entries, err := marketsvc.GetMarketHistory(c.Request.Context(), market.Asset, market.DurationSeconds, marketID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch history"})
+		return
+	}
+	if entries == nil {
+		entries = []marketsvc.MarketHistoryEntry{}
+	}
+	c.JSON(http.StatusOK, gin.H{"history": entries})
+}
+
 func GetMarkets(c *gin.Context) {
 	marketType := c.Query("type")
 	status := c.Query("status")

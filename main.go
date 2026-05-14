@@ -121,6 +121,8 @@ func main() {
 	r.GET("/markets/:id/candles", handlersmarkets.GetMarketCandles)
 	r.GET("/markets/:id/opinion-trend", handlersmarkets.GetMarketOpinionTrend)
 	r.GET("/markets/:id/volume", handlersmarkets.GetMarketVolume)
+	r.GET("/markets/:id/stats", handlersmarkets.GetMarketStats)
+	r.GET("/markets/:id/history", handlersmarkets.GetMarketHistory)
 	r.GET("/markets/:id/quote", handlersmarkets.GetMarketFillPreview)
 	r.GET("/markets/:id/trades", handlersmarkets.GetMarketTrades)
 
