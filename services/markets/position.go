@@ -12,6 +12,12 @@ import (
 	"github.com/vant-xyz/backend-code/utils"
 )
 
+func awardTradeVP(ctx context.Context, userEmail string, isDemo bool, action db.VPAction, pts float64, refID string) {
+	if err := db.AwardVanticPoints(ctx, userEmail, isDemo, action, pts, refID); err != nil {
+		log.Printf("[VP] trade award failed user=%s action=%s: %v", userEmail, action, err)
+	}
+}
+
 const payoutPerWinningShare = 1.0
 
 type UpsertPositionInput struct {
@@ -63,6 +69,7 @@ func UpsertPosition(ctx context.Context, input UpsertPositionInput) (*models.Pos
 		}
 		return nil, fmt.Errorf("failed to save position: %w", err)
 	}
+	go awardTradeVP(context.Background(), input.UserEmail, input.IsDemo, db.VPTradeExecuted, 5, position.ID+"_executed")
 	return position, nil
 }
 
@@ -104,6 +111,12 @@ func SettlePosition(ctx context.Context, positionID string, outcome models.Marke
 
 	if err := db.SettlePositionRecord(ctx, positionID, payout, realizedPnL); err != nil {
 		return fmt.Errorf("failed to mark position %s as settled: %w", positionID, err)
+	}
+
+	if positionWon {
+		go awardTradeVP(context.Background(), position.UserEmail, position.IsDemo, db.VPTradeWon, 20, positionID+"_won")
+	} else {
+		go awardTradeVP(context.Background(), position.UserEmail, position.IsDemo, db.VPTradeLost, -20, positionID+"_lost")
 	}
 
 	log.Printf("[Positions] Settled %s: user=%s side=%s shares=%.2f payout=%.2f pnl=%.2f",
@@ -166,6 +179,12 @@ func ClosePosition(ctx context.Context, input ClosePositionInput) (*models.Posit
 	}
 	if err := db.UpdatePositionAfterClose(ctx, position.ID, remainingShares, realizedPnL, proceeds, nextStatus); err != nil {
 		return nil, 0, fmt.Errorf("failed to update closed position %s: %w", position.ID, err)
+	}
+	go awardTradeVP(context.Background(), position.UserEmail, position.IsDemo, db.VPTradeExecuted, 5, position.ID+"_close_executed")
+	if realizedPnL > 0 {
+		go awardTradeVP(context.Background(), position.UserEmail, position.IsDemo, db.VPTradeWon, 20, position.ID+"_close_won")
+	} else if realizedPnL < 0 {
+		go awardTradeVP(context.Background(), position.UserEmail, position.IsDemo, db.VPTradeLost, -20, position.ID+"_close_lost")
 	}
 	position.Shares = remainingShares
 	position.RealizedPnL += realizedPnL

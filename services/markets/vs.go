@@ -118,6 +118,12 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 	_ = db.UpdateVSEventFields(context.Background(), event.ID, map[string]interface{}{"creation_tx_hash": tx})
 	_ = db.UpdateVSEventChainStateIfNotTerminal(context.Background(), event.ID, "CHAIN_CREATED")
 
+	go func(email string, isDemo bool, evID string) {
+		if err := db.AwardVanticPoints(context.Background(), email, isDemo, db.VPVSCreated, 150, evID+"_vs_created"); err != nil {
+			log.Printf("[VP] vs_created award failed user=%s: %v", email, err)
+		}
+	}(input.CreatorEmail, input.IsDemo, event.ID)
+
 	fresh, _ := db.GetVSEventByID(ctx, event.ID)
 	if fresh != nil {
 		return fresh, nil
@@ -154,6 +160,11 @@ func JoinVSEvent(ctx context.Context, eventID, userEmail string) (*models.VSEven
 	if err := db.SaveVSEventParticipant(ctx, part); err != nil {
 		return nil, err
 	}
+	go func(email string, isDemo bool, evID string) {
+		if err := db.AwardVanticPoints(context.Background(), email, isDemo, db.VPVSJoined, 125, evID+"_"+email+"_vs_joined"); err != nil {
+			log.Printf("[VP] vs_joined award failed user=%s: %v", email, err)
+		}
+	}(userEmail, event.IsDemo, event.ID)
 
 	participants, _ := db.GetVSEventParticipants(ctx, event.ID)
 	status := event.Status
@@ -337,7 +348,26 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 	}
 
 	pot := float64(len(parts)) * event.StakeAmount
-	return services.CreditBalance(ctx, winner, pot, vsQuoteCurrency(event.IsDemo))
+	if err := services.CreditBalance(ctx, winner, pot, vsQuoteCurrency(event.IsDemo)); err != nil {
+		return err
+	}
+
+	go func(evParts []models.VSEventParticipant, outcome models.VSOutcome, isDemo bool) {
+		for _, p := range evParts {
+			won := p.Confirmation == string(outcome)
+			action := db.VPVSLost
+			pts := 100.0
+			if won {
+				action = db.VPVSWon
+				pts = 200.0
+			}
+			if err := db.AwardVanticPoints(context.Background(), p.UserEmail, isDemo, action, pts, p.ID+"_vs_settle"); err != nil {
+				log.Printf("[VP] vs settle award failed user=%s: %v", p.UserEmail, err)
+			}
+		}
+	}(parts, outcome, event.IsDemo)
+
+	return nil
 }
 
 func vsQuoteCurrency(isDemo bool) string {

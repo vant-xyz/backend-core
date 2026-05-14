@@ -90,6 +90,7 @@ func HandleInternalDeposit(c *gin.Context) {
 		CreatedAt: time.Now(),
 	}
 	saveTransactionFn(c.Request.Context(), transaction)
+	go services.AwardDepositPoints(context.Background(), req.Email, isDemo, netAmount, transaction.ID)
 
 	go func(toEmail string, tx models.Transaction) {
 		if err := sendTransactionEmailFn(toEmail, tx); err != nil {

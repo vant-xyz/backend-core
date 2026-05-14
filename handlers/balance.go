@@ -107,6 +107,7 @@ func WithdrawBalance(c *gin.Context) {
 		if err := db.SaveTransaction(context.Background(), transaction); err != nil {
 			log.Printf("[Withdraw] Failed to save transaction record for %s: %v", email, err)
 		}
+		go services.AwardWithdrawalPoints(context.Background(), email, req.IsDemo, req.Amount, transaction.ID)
 
 		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
 	}()
@@ -630,6 +631,8 @@ func WithdrawAsset(c *gin.Context) {
 		if err := db.SaveTransaction(context.Background(), transaction); err != nil {
 			log.Printf("[WithdrawAsset] failed to save tx record %s: %v", email, err)
 		}
+		isAssetDemo := strings.HasPrefix(req.Asset, "demo_")
+		go services.AwardAssetSalePoints(context.Background(), email, isAssetDemo, req.Amount, transaction.ID)
 
 		services.PriceHub.BroadcastToUser(email, "BALANCE_UPDATE")
 	}()
