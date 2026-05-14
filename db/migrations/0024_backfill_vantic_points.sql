@@ -65,7 +65,7 @@ SELECT
     user_email,
     (nature = 'demo'),
     'deposit',
-    LEAST(50.0 * POWER(1.1, LEAST(amount - 1.0, 100.0)), 9000000.0),
+    LEAST(50.0 * POWER(1.07, LEAST(amount - 1.0, 200.0)), 9000000.0),
     id,
     created_at
 FROM transactions
@@ -77,7 +77,7 @@ SELECT
     user_email,
     (nature = 'demo'),
     'withdrawal',
-    LEAST(25.0 * POWER(1.3, LEAST(amount - 1.0, 50.0)), 9000000.0),
+    LEAST(25.0 * POWER(1.10, LEAST(amount - 1.0, 150.0)), 9000000.0),
     id,
     created_at
 FROM transactions
@@ -89,7 +89,7 @@ SELECT
     user_email,
     (nature = 'demo'),
     'asset_sale',
-    LEAST(60.0 * POWER(1.7, LEAST(amount - 1.0, 30.0)), 9000000.0),
+    LEAST(60.0 * POWER(1.15, LEAST(amount - 1.0, 100.0)), 9000000.0),
     id,
     created_at
 FROM transactions
