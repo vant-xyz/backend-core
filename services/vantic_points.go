@@ -9,15 +9,15 @@ import (
 )
 
 func DepositVP(usdAmount float64) float64 {
-	return 50.0 * math.Pow(1.1, usdAmount-1.0)
+	return math.Min(50.0*math.Pow(1.1, math.Min(usdAmount-1.0, 100.0)), 9000000.0)
 }
 
 func WithdrawalVP(usdAmount float64) float64 {
-	return 25.0 * math.Pow(1.3, usdAmount-1.0)
+	return math.Min(25.0*math.Pow(1.3, math.Min(usdAmount-1.0, 50.0)), 9000000.0)
 }
 
 func AssetSaleVP(usdAmount float64) float64 {
-	return 60.0 * math.Pow(1.7, usdAmount-1.0)
+	return math.Min(60.0*math.Pow(1.7, math.Min(usdAmount-1.0, 30.0)), 9000000.0)
 }
 
 func AwardDepositPoints(ctx context.Context, userEmail string, isDemo bool, usdAmount float64, refID string) {

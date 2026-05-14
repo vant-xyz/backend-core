@@ -61,35 +61,38 @@ WHERE e.outcome IS NOT NULL AND e.outcome != '' AND p.confirmation != e.outcome
 
 UNION ALL
 
-SELECT user_email,
-       nature = 'demo',
-       'deposit',
-       50.0 * POWER(1.1, amount - 1.0),
-       id,
-       created_at
+SELECT
+    user_email,
+    (nature = 'demo'),
+    'deposit',
+    LEAST(50.0 * POWER(1.1, LEAST(amount - 1.0, 100.0)), 9000000.0),
+    id,
+    created_at
 FROM transactions
-WHERE type IN ('deposit', 'faucet')
+WHERE type IN ('deposit', 'faucet') AND amount > 0
 
 UNION ALL
 
-SELECT user_email,
-       nature = 'demo',
-       'withdrawal',
-       25.0 * POWER(1.3, amount - 1.0),
-       id,
-       created_at
+SELECT
+    user_email,
+    (nature = 'demo'),
+    'withdrawal',
+    LEAST(25.0 * POWER(1.3, LEAST(amount - 1.0, 50.0)), 9000000.0),
+    id,
+    created_at
 FROM transactions
-WHERE type = 'withdrawal'
+WHERE type = 'withdrawal' AND amount > 0
 
 UNION ALL
 
-SELECT user_email,
-       nature = 'demo',
-       'asset_sale',
-       60.0 * POWER(1.7, amount - 1.0),
-       id,
-       created_at
+SELECT
+    user_email,
+    (nature = 'demo'),
+    'asset_sale',
+    LEAST(60.0 * POWER(1.7, LEAST(amount - 1.0, 30.0)), 9000000.0),
+    id,
+    created_at
 FROM transactions
-WHERE type = 'asset_withdrawal'
+WHERE type = 'asset_withdrawal' AND amount > 0
 
 ON CONFLICT (user_email, action, ref_id) WHERE ref_id IS NOT NULL DO NOTHING;
