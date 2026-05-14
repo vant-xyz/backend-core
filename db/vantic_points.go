@@ -22,6 +22,9 @@ const (
 )
 
 func AwardVanticPoints(ctx context.Context, userEmail string, isDemo bool, action VPAction, points float64, refID string) error {
+	if Pool == nil {
+		return nil
+	}
 	var refPtr *string
 	if refID != "" {
 		refPtr = &refID
@@ -39,6 +42,9 @@ func AwardVanticPoints(ctx context.Context, userEmail string, isDemo bool, actio
 }
 
 func GetUserVanticPoints(ctx context.Context, userEmail string, isDemo bool) (float64, error) {
+	if Pool == nil {
+		return 0, nil
+	}
 	var total float64
 	err := Pool.QueryRow(ctx,
 		`SELECT COALESCE(SUM(points), 0) FROM vantic_points_ledger WHERE user_email = $1 AND is_demo = $2`,
