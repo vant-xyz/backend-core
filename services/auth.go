@@ -2,12 +2,21 @@ package services
 
 import (
 	"errors"
+	"log"
 	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
+
+func jwtSecret() []byte {
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		log.Fatal("JWT_SECRET environment variable is required")
+	}
+	return []byte(s)
+}
 
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
@@ -20,32 +29,20 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 func GenerateJWT(email string) (string, error) {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "vant-default-secret-key"
-	}
-
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"email": email,
 		"exp":   time.Now().Add(time.Hour * 72).Unix(),
 	})
-
-	return token.SignedString([]byte(secret))
+	return token.SignedString(jwtSecret())
 }
 
 func VerifyJWT(tokenString string) (string, error) {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "vant-default-secret-key"
-	}
-
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
 		}
-		return []byte(secret), nil
+		return jwtSecret(), nil
 	})
-
 	if err != nil {
 		return "", err
 	}
