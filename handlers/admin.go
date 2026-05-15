@@ -606,3 +606,64 @@ func GetReserveWalletBalances(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "result": result})
 }
+
+var botEmails = []string{
+	"carsonpine@hotmail.com",
+	"quaddavid4@hotmail.com",
+	"vant.charlie@testmail.com",
+	"vant.diana@testmail.com",
+	"vant.eve@testmail.com",
+	"vant.frank@testmail.com",
+	"vant.grace@testmail.com",
+	"vant.henry@testmail.com",
+	"vant.iris@testmail.com",
+	"vant.jack@testmail.com",
+	"vant.lily@testmail.com",
+	"vant.max@testmail.com",
+	"vant.nina@testmail.com",
+	"vant.omar@testmail.com",
+	"vant.paul@testmail.com",
+	"vant.quinn@testmail.com",
+	"vant.rose@testmail.com",
+	"vant.sam@testmail.com",
+	"vant.tina@testmail.com",
+	"vant.uma@testmail.com",
+	"vant.victor@testmail.com",
+	"vant.wendy@testmail.com",
+	"vant.xander@testmail.com",
+	"vant.yara@testmail.com",
+	"vant.zack@testmail.com",
+	"vant.amber@testmail.com",
+	"vant.blake@testmail.com",
+	"vant.cora@testmail.com",
+	"vant.derek@testmail.com",
+	"vant.elena@testmail.com",
+}
+
+func FundBotAccounts(c *gin.Context) {
+	var req struct {
+		Amount float64 `json:"amount" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "amount must be a positive number"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tag, err := db.Pool.Exec(ctx, `
+		UPDATE balances
+		SET demo_naira = $1
+		WHERE email = ANY($2)
+	`, req.Amount, botEmails)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to fund bots: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"funded":   tag.RowsAffected(),
+		"amount":   req.Amount,
+		"bots":     len(botEmails),
+	})
+}
