@@ -11,11 +11,13 @@ import (
 )
 
 func jwtSecret() []byte {
-	s := os.Getenv("JWT_SECRET")
-	if s == "" {
+	return []byte(os.Getenv("JWT_SECRET"))
+}
+
+func ValidateJWTSecret() {
+	if os.Getenv("JWT_SECRET") == "" {
 		log.Fatal("JWT_SECRET environment variable is required")
 	}
-	return []byte(s)
 }
 
 func HashPassword(password string) (string, error) {

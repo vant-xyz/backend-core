@@ -32,6 +32,8 @@ func splitByComma(s string) []string {
 func main() {
 	_ = godotenv.Load()
 
+	services.ValidateJWTSecret()
+
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL environment variable is required")

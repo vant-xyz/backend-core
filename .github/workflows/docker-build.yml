@@ -47,6 +47,7 @@ jobs:
         env:
           DATABASE_URL: postgres://vant:vanttest@localhost:5432/vant_test?sslmode=disable
           REDIS_URL: redis://localhost:6379
+          JWT_SECRET: ci-test-secret-not-for-production
         run: go test -count=1 -v ./...
 
   swagger:
