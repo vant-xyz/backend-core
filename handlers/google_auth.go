@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vant-xyz/backend-code/db"
@@ -68,6 +69,11 @@ func GoogleCallback(c *gin.Context) {
 
 	user, err := db.GetUserByEmail(c.Request.Context(), info.Email)
 	if err != nil {
+		if !strings.Contains(err.Error(), "user not found:") {
+			log.Printf("[GoogleCallback] get user by email: %v", err)
+			fail("account_lookup_failed")
+			return
+		}
 		wallet, err := services.GenerateWallet(info.Email)
 		if err != nil {
 			log.Printf("[GoogleCallback] generate wallet: %v", err)
