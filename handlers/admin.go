@@ -430,8 +430,9 @@ func GetOverview(c *gin.Context) {
 		activeMarkets int64
 		orderCount    int64
 		txCount       int64
-		tvlReal       float64
-		tvlDemo       float64
+		fillCount     int64
+		tvlMainnet    float64
+		tvlDevnet     float64
 		totalLocked   float64
 	)
 
@@ -440,9 +441,34 @@ func GetOverview(c *gin.Context) {
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM markets WHERE status = 'active'`).Scan(&activeMarkets)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders`).Scan(&orderCount)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM transactions`).Scan(&txCount)
-	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(naira), 0) FROM balances`).Scan(&tvlReal)
-	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDemo)
+	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders WHERE status IN ('FILLED','PARTIALLY_FILLED')`).Scan(&fillCount)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(naira), 0) FROM balances`).Scan(&tvlMainnet)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDevnet)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(locked_balance), 0) FROM balances`).Scan(&totalLocked)
+
+	// Fee wallet balances — best-effort, non-blocking
+	type feeResult struct {
+		sol  float64
+		base float64
+	}
+	feeCh := make(chan feeResult, 1)
+	go func() {
+		var res feeResult
+		mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
+		if mainnetRPC != "" {
+			res.sol, _ = services.GetSolBalanceFromRPC(feeWalletSolPubKey(), mainnetRPC)
+		}
+		if baseAddr := feeWalletBaseAddress(); baseAddr != "" {
+			res.base, _ = services.GetBaseEthBalance(baseAddr)
+		}
+		feeCh <- res
+	}()
+
+	fees := feeResult{}
+	select {
+	case fees = <-feeCh:
+	case <-time.After(5 * time.Second):
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":        true,
@@ -450,10 +476,13 @@ func GetOverview(c *gin.Context) {
 		"markets":        marketCount,
 		"active_markets": activeMarkets,
 		"orders":         orderCount,
+		"fills":          fillCount,
 		"transactions":   txCount,
-		"tvl_real":       tvlReal,
-		"tvl_demo":       tvlDemo,
+		"tvl_mainnet":    tvlMainnet,
+		"tvl_devnet":     tvlDevnet,
 		"total_locked":   totalLocked,
+		"fee_sol":        fees.sol,
+		"fee_base_eth":   fees.base,
 	})
 }
 

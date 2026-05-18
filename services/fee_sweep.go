@@ -274,3 +274,27 @@ func solFeeWalletPubKey() string {
 	}
 	return "EVy3WPB2iZpvh1Dw4DogkzZcVfdVr1tVhtqBpnKNje7G"
 }
+
+// GetBaseEthBalance returns the ETH balance (in ETH, not wei) of any Base address.
+func GetBaseEthBalance(address string) (float64, error) {
+	rpcURL := os.Getenv("MAINNET_BASE_HTTP_URL")
+	if rpcURL == "" {
+		rpcURL = os.Getenv("MAINNET_BASE_RPC_URL")
+	}
+	if rpcURL == "" {
+		return 0, fmt.Errorf("base RPC env not configured")
+	}
+	client, err := ethclient.Dial(rpcURL)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bal, err := client.BalanceAt(ctx, common.HexToAddress(address), nil)
+	if err != nil {
+		return 0, err
+	}
+	f, _ := new(big.Float).Quo(new(big.Float).SetInt(bal), big.NewFloat(1e18)).Float64()
+	return f, nil
+}

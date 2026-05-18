@@ -24,6 +24,25 @@ import (
 const rpcTimeout = 10 * time.Second
 const defaultWSOLMint = "So11111111111111111111111111111111111111112"
 
+func GetSolBalanceFromRPC(pubKey, rpcURL string) (float64, error) {
+	client := rpc.New(rpcURL)
+
+	account, err := solana.PublicKeyFromBase58(pubKey)
+	if err != nil {
+		return 0, fmt.Errorf("invalid pubkey %s: %w", pubKey, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+
+	res, err := client.GetBalance(ctx, account, rpc.CommitmentFinalized)
+	if err != nil {
+		return 0, fmt.Errorf("GetBalance RPC failed for %s: %w", pubKey, err)
+	}
+
+	return float64(res.Value) / 1e9, nil
+}
+
 func GetSolBalance(pubKey string) (float64, error) {
 	rpcURL := os.Getenv("DEVNET_SOLANA_RPC_URL")
 	client := rpc.New(rpcURL)
