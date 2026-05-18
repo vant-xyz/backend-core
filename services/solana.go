@@ -24,6 +24,37 @@ import (
 const rpcTimeout = 10 * time.Second
 const defaultWSOLMint = "So11111111111111111111111111111111111111112"
 
+func GetProgramTxCount(programID, rpcURL string) (int64, error) {
+	pubKey, err := solana.PublicKeyFromBase58(programID)
+	if err != nil {
+		return 0, fmt.Errorf("invalid program ID: %w", err)
+	}
+	client := rpc.New(rpcURL)
+
+	pageSize := 1000
+	var total int64
+	var before solana.Signature
+
+	for page := 0; page < 50; page++ {
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+		opts := &rpc.GetSignaturesForAddressOpts{Limit: &pageSize}
+		if !before.IsZero() {
+			opts.Before = before
+		}
+		sigs, err := client.GetSignaturesForAddressWithOpts(ctx, pubKey, opts)
+		cancel()
+		if err != nil {
+			return total, err
+		}
+		total += int64(len(sigs))
+		if len(sigs) < pageSize {
+			break
+		}
+		before = sigs[len(sigs)-1].Signature
+	}
+	return total, nil
+}
+
 func GetSolBalanceFromRPC(pubKey, rpcURL string) (float64, error) {
 	client := rpc.New(rpcURL)
 

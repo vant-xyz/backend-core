@@ -446,43 +446,47 @@ func GetOverview(c *gin.Context) {
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDevnet)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(locked_balance), 0) FROM balances`).Scan(&totalLocked)
 
-	// Fee wallet balances — best-effort, non-blocking
-	type feeResult struct {
-		sol  float64
-		base float64
+	type asyncResult struct {
+		sol      float64
+		base     float64
+		programTxCount int64
 	}
-	feeCh := make(chan feeResult, 1)
+	ch := make(chan asyncResult, 1)
 	go func() {
-		var res feeResult
+		var res asyncResult
 		mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
 		if mainnetRPC != "" {
 			res.sol, _ = services.GetSolBalanceFromRPC(feeWalletSolPubKey(), mainnetRPC)
+			programID := os.Getenv("VANT_PROGRAM_ID")
+			if programID != "" {
+				res.programTxCount, _ = services.GetProgramTxCount(programID, mainnetRPC)
+			}
 		}
 		if baseAddr := feeWalletBaseAddress(); baseAddr != "" {
 			res.base, _ = services.GetBaseEthBalance(baseAddr)
 		}
-		feeCh <- res
+		ch <- res
 	}()
 
-	fees := feeResult{}
+	async := asyncResult{}
 	select {
-	case fees = <-feeCh:
-	case <-time.After(5 * time.Second):
+	case async = <-ch:
+	case <-time.After(8 * time.Second):
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"users":          userCount,
-		"markets":        marketCount,
-		"active_markets": activeMarkets,
-		"orders":         orderCount,
-		"fills":          fillCount,
-		"transactions":   txCount,
-		"tvl_mainnet":    tvlMainnet,
-		"tvl_devnet":     tvlDevnet,
-		"total_locked":   totalLocked,
-		"fee_sol":        fees.sol,
-		"fee_base_eth":   fees.base,
+		"success":          true,
+		"users":            userCount,
+		"markets":          marketCount,
+		"active_markets":   activeMarkets,
+		"orders":           orderCount,
+		"fills":            fillCount,
+		"program_tx_count": async.programTxCount,
+		"tvl_mainnet":      tvlMainnet,
+		"tvl_devnet":       tvlDevnet,
+		"total_locked":     totalLocked,
+		"fee_sol":          async.sol,
+		"fee_base_eth":     async.base,
 	})
 }
 
