@@ -468,10 +468,9 @@ func GetOverview(c *gin.Context) {
 		devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
 		if devnetRPC != "" {
 			res.sol, _ = services.GetSolBalanceFromRPC(feeWalletSolPubKey(), devnetRPC)
-			programID := os.Getenv("VANT_PROGRAM_ID")
-			if programID != "" {
-				res.programTxCount, _ = services.GetProgramTxCount(programID, devnetRPC)
-			}
+		}
+		if programID := os.Getenv("VANT_PROGRAM_ID"); programID != "" {
+			res.programTxCount, _ = services.GetProgramTxCount(programID)
 		}
 		if baseAddr := feeWalletBaseAddress(); baseAddr != "" {
 			res.base, _ = services.GetBaseEthBalance(baseAddr)

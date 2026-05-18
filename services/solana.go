@@ -24,35 +24,64 @@ import (
 const rpcTimeout = 10 * time.Second
 const defaultWSOLMint = "So11111111111111111111111111111111111111112"
 
-func GetProgramTxCount(programID, rpcURL string) (int64, error) {
+func GetProgramTxCount(programID string) (int64, error) {
 	pubKey, err := solana.PublicKeyFromBase58(programID)
 	if err != nil {
 		return 0, fmt.Errorf("invalid program ID: %w", err)
 	}
-	client := rpc.New(rpcURL)
+
+	candidates := []string{}
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			return
+		}
+		for _, e := range candidates {
+			if e == u {
+				return
+			}
+		}
+		candidates = append(candidates, u)
+	}
+	add(os.Getenv("DEVNET_SOLANA_RPC_URL"))
+	add(os.Getenv("DEVNET_SOLANA_RPC_URL_1"))
+	add(os.Getenv("DEVNET_SOLANA_RPC_URL_2"))
 
 	pageSize := 1000
-	var total int64
-	var before solana.Signature
+	var lastErr error
 
-	for page := 0; page < 50; page++ {
-		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-		opts := &rpc.GetSignaturesForAddressOpts{Limit: &pageSize}
-		if !before.IsZero() {
-			opts.Before = before
+	for _, rpcURL := range candidates {
+		client := rpc.New(rpcURL)
+		var total int64
+		var before solana.Signature
+		failed := false
+
+		for page := 0; page < 50; page++ {
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+			opts := &rpc.GetSignaturesForAddressOpts{Limit: &pageSize}
+			if !before.IsZero() {
+				opts.Before = before
+			}
+			sigs, err := client.GetSignaturesForAddressWithOpts(ctx, pubKey, opts)
+			cancel()
+			if err != nil {
+				lastErr = err
+				failed = true
+				break
+			}
+			total += int64(len(sigs))
+			if len(sigs) < pageSize {
+				break
+			}
+			before = sigs[len(sigs)-1].Signature
 		}
-		sigs, err := client.GetSignaturesForAddressWithOpts(ctx, pubKey, opts)
-		cancel()
-		if err != nil {
-			return total, err
+
+		if !failed {
+			return total, nil
 		}
-		total += int64(len(sigs))
-		if len(sigs) < pageSize {
-			break
-		}
-		before = sigs[len(sigs)-1].Signature
 	}
-	return total, nil
+
+	return 0, lastErr
 }
 
 func GetSolBalanceFromRPC(pubKey, rpcURL string) (float64, error) {
