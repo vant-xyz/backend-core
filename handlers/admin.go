@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -425,41 +426,49 @@ func GetOverview(c *gin.Context) {
 	ctx := context.Background()
 
 	var (
-		userCount     int64
-		marketCount   int64
-		activeMarkets int64
-		orderCount    int64
-		txCount       int64
-		fillCount     int64
-		tvlMainnet    float64
-		tvlDevnet     float64
-		totalLocked   float64
+		userCount      int64
+		marketCount    int64
+		activeMarkets  int64
+		orderCount     int64
+		fillCount      int64
+		tvlMainnet     float64
+		totalDemoSol   float64
+		totalDemoUsdc  float64
+		totalLocked    float64
 	)
 
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM markets`).Scan(&marketCount)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM markets WHERE status = 'active'`).Scan(&activeMarkets)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders`).Scan(&orderCount)
-	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM transactions`).Scan(&txCount)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders WHERE status IN ('FILLED','PARTIALLY_FILLED')`).Scan(&fillCount)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(naira), 0) FROM balances`).Scan(&tvlMainnet)
-	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDevnet)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_sol), 0) FROM balances`).Scan(&totalDemoSol)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_usdc_sol), 0) FROM balances`).Scan(&totalDemoUsdc)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(locked_balance), 0) FROM balances`).Scan(&totalLocked)
 
+	solPrice := 0.0
+	if prices := services.GetLatestPrices(); prices != nil {
+		if p, ok := prices["SOL"]; ok {
+			solPrice, _ = strconv.ParseFloat(p.Price, 64)
+		}
+	}
+	tvlDevnet := totalDemoSol*solPrice + totalDemoUsdc
+
 	type asyncResult struct {
-		sol      float64
-		base     float64
+		sol            float64
+		base           float64
 		programTxCount int64
 	}
 	ch := make(chan asyncResult, 1)
 	go func() {
 		var res asyncResult
-		mainnetRPC := os.Getenv("MAINNET_SOLANA_RPC_URL")
-		if mainnetRPC != "" {
-			res.sol, _ = services.GetSolBalanceFromRPC(feeWalletSolPubKey(), mainnetRPC)
+		devnetRPC := os.Getenv("DEVNET_SOLANA_RPC_URL")
+		if devnetRPC != "" {
+			res.sol, _ = services.GetSolBalanceFromRPC(feeWalletSolPubKey(), devnetRPC)
 			programID := os.Getenv("VANT_PROGRAM_ID")
 			if programID != "" {
-				res.programTxCount, _ = services.GetProgramTxCount(programID, mainnetRPC)
+				res.programTxCount, _ = services.GetProgramTxCount(programID, devnetRPC)
 			}
 		}
 		if baseAddr := feeWalletBaseAddress(); baseAddr != "" {
