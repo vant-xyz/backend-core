@@ -426,15 +426,16 @@ func GetOverview(c *gin.Context) {
 	ctx := context.Background()
 
 	var (
-		userCount      int64
-		marketCount    int64
-		activeMarkets  int64
-		orderCount     int64
-		fillCount      int64
-		tvlMainnet     float64
-		totalDemoSol   float64
-		totalDemoUsdc  float64
-		totalLocked    float64
+		userCount     int64
+		marketCount   int64
+		activeMarkets int64
+		orderCount    int64
+		fillCount     int64
+		tvlMainnet    float64
+		tvlDevnet     float64
+		totalDemoSol  float64
+		totalDemoUsdc float64
+		totalLocked   float64
 	)
 
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount)
@@ -443,6 +444,7 @@ func GetOverview(c *gin.Context) {
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders`).Scan(&orderCount)
 	db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM orders WHERE status IN ('FILLED','PARTIALLY_FILLED')`).Scan(&fillCount)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(naira), 0) FROM balances`).Scan(&tvlMainnet)
+	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_naira), 0) FROM balances`).Scan(&tvlDevnet)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_sol), 0) FROM balances`).Scan(&totalDemoSol)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(demo_usdc_sol), 0) FROM balances`).Scan(&totalDemoUsdc)
 	db.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(locked_balance), 0) FROM balances`).Scan(&totalLocked)
@@ -453,7 +455,7 @@ func GetOverview(c *gin.Context) {
 			solPrice, _ = strconv.ParseFloat(p.Price, 64)
 		}
 	}
-	tvlDevnet := totalDemoSol*solPrice + totalDemoUsdc
+	devnetAssets := totalDemoSol*solPrice + totalDemoUsdc
 
 	type asyncResult struct {
 		sol            float64
@@ -493,6 +495,7 @@ func GetOverview(c *gin.Context) {
 		"program_tx_count": async.programTxCount,
 		"tvl_mainnet":      tvlMainnet,
 		"tvl_devnet":       tvlDevnet,
+		"devnet_assets":    devnetAssets,
 		"total_locked":     totalLocked,
 		"fee_sol":          async.sol,
 		"fee_base_eth":     async.base,
@@ -694,7 +697,7 @@ func FundBotAccounts(c *gin.Context) {
 	ctx := c.Request.Context()
 	tag, err := db.Pool.Exec(ctx, `
 		UPDATE balances
-		SET demo_naira = $1
+		SET demo_naira = demo_naira + $1
 		WHERE email = ANY($2)
 	`, req.Amount, botEmails)
 	if err != nil {
