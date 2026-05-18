@@ -52,6 +52,14 @@ func CreateVSEvent(ctx context.Context, input CreateVSEventInput) (*models.VSEve
 	if input.ParticipantTarget < 2 {
 		return nil, fmt.Errorf("participant_target must be >= 2")
 	}
+	if input.Mode == models.VSModeMutual && input.ParticipantTarget != 2 {
+		return nil, fmt.Errorf("mutual mode requires exactly 2 participants")
+	}
+	if input.Mode == models.VSModeConsensus {
+		if input.Threshold < 1 || input.Threshold > input.ParticipantTarget {
+			return nil, fmt.Errorf("consensus threshold must be between 1 and participant_target (%d)", input.ParticipantTarget)
+		}
+	}
 	if input.ResolveDeadlineUTC.Before(input.JoinDeadlineUTC) {
 		return nil, fmt.Errorf("resolve deadline must be after join deadline")
 	}
@@ -136,8 +144,14 @@ func JoinVSEvent(ctx context.Context, eventID, userEmail string) (*models.VSEven
 	if err != nil {
 		return nil, err
 	}
-	if event.Status != models.VSStatusOpen && event.Status != models.VSStatusActive {
+	if event.Status != models.VSStatusOpen {
 		return nil, fmt.Errorf("event is not joinable")
+	}
+	if time.Now().UTC().After(event.JoinDeadlineUTC) {
+		return nil, fmt.Errorf("join deadline has passed")
+	}
+	if len(event.Participants) >= event.ParticipantTarget {
+		return nil, fmt.Errorf("event is full")
 	}
 	for _, p := range event.Participants {
 		if p.UserEmail == userEmail {
@@ -198,11 +212,13 @@ func ConfirmVSEventOutcome(ctx context.Context, eventID, userEmail string, outco
 	if outcome != models.VSOutcomeYes && outcome != models.VSOutcomeNo {
 		return nil, fmt.Errorf("invalid outcome")
 	}
-	if event.Status != models.VSStatusActive && event.Status != models.VSStatusOpen {
-		return nil, fmt.Errorf("event is not active")
+	if event.Status != models.VSStatusActive {
+		return nil, fmt.Errorf("event is not active — all participants must join before confirming")
 	}
-
 	now := time.Now().UTC()
+	if now.After(event.ResolveDeadlineUTC) {
+		return nil, fmt.Errorf("resolution deadline has passed")
+	}
 	if err := db.UpdateVSEventParticipantConfirmation(ctx, event.ID, userEmail, string(outcome), now); err != nil {
 		return nil, err
 	}
@@ -329,18 +345,22 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 		}
 	}
 
+	// YES = creator's claim was correct → creator wins.
+	// NO  = creator's claim was wrong → challenger wins.
 	winner := ""
-	for _, p := range parts {
-		if p.Confirmation == string(outcome) {
-			winner = p.UserEmail
-			break
+	if outcome == models.VSOutcomeYes {
+		winner = event.CreatorEmail
+	} else {
+		for _, p := range parts {
+			if p.UserEmail != event.CreatorEmail {
+				winner = p.UserEmail
+				break
+			}
 		}
 	}
 	if winner == "" {
-		// no clear winner path: refund everyone
 		for _, p := range parts {
-			err := services.CreditBalance(ctx, p.UserEmail, p.LockedAmount, vsQuoteCurrency(event.IsDemo))
-			if err != nil {
+			if err := services.CreditBalance(ctx, p.UserEmail, p.LockedAmount, vsQuoteCurrency(event.IsDemo)); err != nil {
 				return err
 			}
 		}
@@ -352,9 +372,9 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 		return err
 	}
 
-	go func(evParts []models.VSEventParticipant, outcome models.VSOutcome, isDemo bool) {
+	go func(evParts []models.VSEventParticipant, winner string, isDemo bool) {
 		for _, p := range evParts {
-			won := p.Confirmation == string(outcome)
+			won := p.UserEmail == winner
 			action := db.VPVSLost
 			pts := 100.0
 			if won {
@@ -365,7 +385,7 @@ func settleVSEventLedger(ctx context.Context, eventID string, outcome models.VSO
 				log.Printf("[VP] vs settle award failed user=%s: %v", p.UserEmail, err)
 			}
 		}
-	}(parts, outcome, event.IsDemo)
+	}(parts, winner, event.IsDemo)
 
 	return nil
 }
