@@ -102,6 +102,8 @@ func main() {
 	r.POST("/auth/exists", handlers.CheckEmailExists)
 	r.POST("/auth/username/exists", handlers.CheckUsername)
 	r.POST("/auth", handlers.Auth)
+	r.GET("/auth/google", handlers.GoogleLogin)
+	r.GET("/auth/google/callback", handlers.GoogleCallback)
 
 	internal := r.Group("/internal")
 	internal.Use(handlers.IndexerKeyMiddleware())

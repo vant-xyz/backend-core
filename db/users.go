@@ -155,7 +155,7 @@ func GetAdminUserByEmail(ctx context.Context, email string) (*UserAdminStats, er
 
 func GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	row := Pool.QueryRow(ctx, `
-		SELECT email, name, full_name, username, password,
+		SELECT email, name, full_name, username, COALESCE(password, ''),
 		       vant_id, balance_id, socials, profile_image_url, created_at
 		FROM users WHERE email = $1
 	`, email)
@@ -293,6 +293,60 @@ func UpdateUser(ctx context.Context, email string, updates map[string]interface{
 		args...,
 	)
 	return err
+}
+
+func CreateOAuthUser(ctx context.Context, email, name, profileImageURL, provider string, wallet *models.Wallet) (*models.User, error) {
+	balanceID := fmt.Sprintf("BAL_%s", utils.RandomAlphanumeric(10))
+	vantID := fmt.Sprintf("VANTID_%s", utils.RandomNumbers(8))
+	username := fmt.Sprintf("@user%s", utils.RandomAlphanumeric(6))
+	now := time.Now()
+
+	tx, err := Pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	user := models.User{
+		Email:           email,
+		Name:            name,
+		FullName:        name,
+		Username:        username,
+		VantID:          vantID,
+		BalanceID:       balanceID,
+		Socials:         []string{},
+		ProfileImageURL: profileImageURL,
+		CreatedAt:       now,
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (email, name, full_name, username, password, vant_id, balance_id, socials, profile_image_url, created_at, is_oauth, which_oauth)
+		VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, TRUE, $10)
+	`, user.Email, user.Name, user.FullName, user.Username,
+		user.VantID, user.BalanceID, user.Socials, user.ProfileImageURL, user.CreatedAt, provider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert oauth user: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `INSERT INTO balances (id, email) VALUES ($1, $2)`, balanceID, email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert balance: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO wallets (account_id, email, sol_public_key, sol_private_key, base_public_key, base_private_key, naira_account_number)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, wallet.AccountID, email, wallet.SolPublicKey, wallet.SolPrivateKey,
+		wallet.BasePublicKey, wallet.BasePrivateKey, wallet.NairaAccountNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert wallet: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit oauth user creation: %w", err)
+	}
+
+	return &user, nil
 }
 
 func UpdateUsername(ctx context.Context, email, username string) error {
