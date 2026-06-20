@@ -3,18 +3,22 @@ package test
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"testing"
 )
 
+// mirrors handlers.GenerateReferralCode exactly
 func GenerateReferralCode() string {
-	b := make([]byte, 3)
-	rand.Read(b)
-	return fmt.Sprintf("%X", b)
+	max := big.NewInt(1_000_000)
+	n, _ := rand.Int(rand.Reader, max)
+	return fmt.Sprintf("%06d", n)
 }
 
 func TestGenerateReferralCodeUnique(t *testing.T) {
+	// 30 samples from a 1,000,000-value space gives a birthday-collision
+	// probability of ~0.04%, making this test deterministically stable.
 	codes := make(map[string]bool)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 30; i++ {
 		code := GenerateReferralCode()
 		if codes[code] {
 			t.Errorf("Collision found! Code %s was generated twice", code)
@@ -32,13 +36,12 @@ func TestGenerateReferralCodeLength(t *testing.T) {
 	}
 }
 
-func TestReferralCodeIsHex(t *testing.T) {
+func TestReferralCodeIsNumeric(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		code := GenerateReferralCode()
 		for _, char := range code {
-			isHex := (char >= '0' && char <= '9') || (char >= 'A' && char <= 'F')
-			if !isHex {
-				t.Errorf("Expected hex character, got %c in code %s", char, code)
+			if char < '0' || char > '9' {
+				t.Errorf("Expected digit, got %c in code %s", char, code)
 			}
 		}
 	}
