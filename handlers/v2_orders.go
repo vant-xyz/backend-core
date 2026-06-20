@@ -76,19 +76,29 @@ func CreateOrder(c *gin.Context) {
 
 	isBuy, _ := body["isBuy"].(bool)
 
-	// depositAmount as uint64 for fee calculation.
-	var depositAmount uint64
+	// depositAmount as uint64 — this is the TOTAL the user pays.
+	var typedDeposit uint64
 	switch v := body["depositAmount"].(type) {
 	case float64:
-		depositAmount = uint64(v)
+		typedDeposit = uint64(v)
 	case string:
-		fmt.Sscan(v, &depositAmount)
+		fmt.Sscan(v, &typedDeposit)
 	}
 
 	depositMint, _ := body["depositMint"].(string)
 	if depositMint == "" {
 		depositMint = jupiterclient.DefaultDepositMint
 		body["depositMint"] = depositMint
+	}
+
+	// Fee model: deduct the Vantic cut FROM the user's chosen amount, so the user
+	// pays exactly what they typed. Jupiter receives (typed − fee); the fee goes
+	// to V2_FEE_WALLET in a separate tx. Only for buys with a deposit.
+	jupiterDeposit := typedDeposit
+	if isBuy && typedDeposit > 0 {
+		fee := jupiterclient.CalcFee(typedDeposit)
+		jupiterDeposit = typedDeposit - fee
+		body["depositAmount"] = jupiterDeposit
 	}
 
 	reqBytes, err := json.Marshal(body)
@@ -124,16 +134,18 @@ func CreateOrder(c *gin.Context) {
 		feeTransaction string
 		feeAmount      uint64
 	)
-	if isBuy && depositAmount > 0 {
+	if isBuy && typedDeposit > 0 {
 		blockhash, bhErr := latestBlockhash(c.Request.Context())
 		if bhErr != nil {
 			// Don't block the trade on an RPC hiccup — log loudly and let the
 			// order proceed without the fee tx this once.
 			log.Printf("[v2/orders] fee tx skipped, blockhash fetch failed: %v", bhErr)
 		} else {
-			feeTransaction, feeAmount, err = jupiterclient.BuildFeeTransfer(owner, depositMint, depositAmount, blockhash)
+			// Fee is computed on the TYPED amount (= CalcFee(typedDeposit)), matching
+			// the amount deducted from the Jupiter deposit above.
+			feeTransaction, feeAmount, err = jupiterclient.BuildFeeTransfer(owner, depositMint, typedDeposit, blockhash)
 			if err != nil {
-				log.Printf("[v2/orders] fee tx build failed owner=%s deposit=%d: %v", owner, depositAmount, err)
+				log.Printf("[v2/orders] fee tx build failed owner=%s deposit=%d: %v", owner, typedDeposit, err)
 				feeTransaction, feeAmount = "", 0
 			}
 		}
@@ -155,7 +167,8 @@ func CreateOrder(c *gin.Context) {
 		"txMeta":         jupBody.TxMeta,
 		"order":          jupBody.Order,
 		"preview": gin.H{
-			"depositAmount":           depositAmount,
+			"depositAmount":           typedDeposit,   // total the user pays
+			"jupiterDepositAmount":    jupiterDeposit, // what reaches the market (typed − fee)
 			"depositMint":             depositMint,
 			"orderCostUsd":            orderFields.OrderCostUsd,
 			"estimatedProtocolFeeUsd": orderFields.EstimatedProtocolFeeUsd,
