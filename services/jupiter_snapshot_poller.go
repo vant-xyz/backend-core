@@ -56,14 +56,18 @@ func runSnapshot() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Fetch all open events across every category.
+	// Fetch the top 100 events by volume across every category.
+	// Jupiter defaults to only 10 events; "start"/"end" are pagination slice
+	// bounds (max range 100) — NOT timestamps. start=0&end=100 grabs the first
+	// 100 events, which covers both the World Cup matches and general markets.
 	// "category=all" is a valid enum value per Jupiter docs.
-	// No "filter" or "limit" param — both are unsupported by Jupiter's API.
 	// Market status is checked in code below.
 	params := url.Values{
 		"category":       {"all"},
 		"includeMarkets": {"true"},
 		"sortBy":         {"volume"},
+		"start":          {"0"},
+		"end":            {"100"},
 	}
 	raw, status, err := jupiter.Get(ctx, "/events", params)
 	if err != nil || status != 200 {

@@ -37,7 +37,7 @@ func GetEvents(c *gin.Context) {
 	params := url.Values{}
 	mergeQuery(params, c,
 		"provider", "includeMarkets", "includeAllMarkets",
-		"start", "end", "limit", "category", "subcategory",
+		"start", "end", "category", "subcategory",
 		"sortBy", "sortDirection", "filter", "tags",
 	)
 	passthroughGet(c, "/events", params)
