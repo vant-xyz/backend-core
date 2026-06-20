@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
+	"github.com/gagliardetto/solana-go"
+	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/gin-gonic/gin"
 	jupiterclient "github.com/vant-xyz/backend-code/services/jupiter"
 )
@@ -18,6 +22,22 @@ func walletPubkey(c *gin.Context) string {
 	wp, _ := c.Get("wallet_pubkey")
 	s, _ := wp.(string)
 	return s
+}
+
+// latestBlockhash fetches a recent blockhash for building the standalone fee tx.
+func latestBlockhash(ctx context.Context) (solana.Hash, error) {
+	rpcURL := os.Getenv("MAINNET_SOLANA_RPC_URL")
+	if rpcURL == "" {
+		return solana.Hash{}, fmt.Errorf("MAINNET_SOLANA_RPC_URL not set")
+	}
+	res, err := rpc.New(rpcURL).GetLatestBlockhash(ctx, rpc.CommitmentConfirmed)
+	if err != nil {
+		return solana.Hash{}, err
+	}
+	if res == nil || res.Value == nil {
+		return solana.Hash{}, fmt.Errorf("empty blockhash response")
+	}
+	return res.Value.Blockhash, nil
 }
 
 // CreateOrder builds a Jupiter order transaction, injects the Vantic fee,
@@ -97,21 +117,25 @@ func CreateOrder(c *gin.Context) {
 		return
 	}
 
-	// Fee injection — only on buy orders with a deposit.
+	// Vantic fee — a SEPARATE transaction (Jupiter pre-signs its order tx, so we
+	// cannot modify it). The client signs both in one prompt and submits the
+	// order first; the fee is only charged after the order lands.
 	var (
-		modifiedTx = jupBody.Transaction
-		feeAmount  uint64
+		feeTransaction string
+		feeAmount      uint64
 	)
-	if isBuy && depositAmount > 0 && jupBody.Transaction != "" {
-		modifiedTx, feeAmount, err = jupiterclient.InjectFee(jupBody.Transaction, owner, depositMint, depositAmount)
-		if err != nil {
-			// Fail the order rather than silently returning Jupiter's tx with no
-			// fee. A silent fallback here means we hand the user an order we earn
-			// nothing on and never find out. Log loudly and surface a 502.
-			log.Printf("[v2/orders] FEE INJECTION FAILED owner=%s market=%v deposit=%d: %v",
-				owner, body["marketId"], depositAmount, err)
-			c.JSON(http.StatusBadGateway, gin.H{"message": "could not build order, please try again"})
-			return
+	if isBuy && depositAmount > 0 {
+		blockhash, bhErr := latestBlockhash(c.Request.Context())
+		if bhErr != nil {
+			// Don't block the trade on an RPC hiccup — log loudly and let the
+			// order proceed without the fee tx this once.
+			log.Printf("[v2/orders] fee tx skipped, blockhash fetch failed: %v", bhErr)
+		} else {
+			feeTransaction, feeAmount, err = jupiterclient.BuildFeeTransfer(owner, depositMint, depositAmount, blockhash)
+			if err != nil {
+				log.Printf("[v2/orders] fee tx build failed owner=%s deposit=%d: %v", owner, depositAmount, err)
+				feeTransaction, feeAmount = "", 0
+			}
 		}
 	}
 
@@ -126,9 +150,10 @@ func CreateOrder(c *gin.Context) {
 	_ = json.Unmarshal(jupBody.Order, &orderFields)
 
 	resp := gin.H{
-		"transaction": modifiedTx,
-		"txMeta":      jupBody.TxMeta,
-		"order":       jupBody.Order,
+		"transaction":    jupBody.Transaction, // Jupiter's order tx, unmodified
+		"feeTransaction": feeTransaction,       // separate Vantic fee tx ("" if none)
+		"txMeta":         jupBody.TxMeta,
+		"order":          jupBody.Order,
 		"preview": gin.H{
 			"depositAmount":           depositAmount,
 			"depositMint":             depositMint,

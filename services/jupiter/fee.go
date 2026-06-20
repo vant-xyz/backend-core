@@ -27,11 +27,74 @@ func CalcFee(depositAmount uint64) uint64 {
 	return depositAmount * FeeBps / 10_000
 }
 
-// InjectFee takes Jupiter's unsigned base64 transaction, appends a SPL Token
-// Transfer of the Vantic fee from owner → V2_FEE_WALLET, and returns the
-// modified base64 transaction plus the fee amount deducted.
+// BuildFeeTransfer builds a STANDALONE unsigned transaction that transfers the
+// Vantic fee from the order owner → V2_FEE_WALLET, returning it as base64 plus
+// the fee amount.
 //
-// Only call this for buy orders (isBuy=true). Close/claim txs pass through unchanged.
+// This is deliberately a separate transaction rather than instructions injected
+// into Jupiter's order tx: Jupiter pre-signs its order transaction with a
+// co-signer, so any modification invalidates that signature. The order tx and
+// this fee tx are signed together (one wallet prompt) and submitted separately.
+func BuildFeeTransfer(ownerPubkey, depositMint string, depositAmount uint64, blockhash solana.Hash) (string, uint64, error) {
+	feeWalletAddr := os.Getenv("V2_FEE_WALLET")
+	if feeWalletAddr == "" {
+		return "", 0, fmt.Errorf("V2_FEE_WALLET env var not set")
+	}
+	if depositMint == "" {
+		depositMint = DefaultDepositMint
+	}
+
+	feeAmount := CalcFee(depositAmount)
+	if feeAmount == 0 {
+		return "", 0, nil
+	}
+
+	owner, err := solana.PublicKeyFromBase58(ownerPubkey)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid owner pubkey: %w", err)
+	}
+	feeWallet, err := solana.PublicKeyFromBase58(feeWalletAddr)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid V2_FEE_WALLET: %w", err)
+	}
+	mint, err := solana.PublicKeyFromBase58(depositMint)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid deposit mint: %w", err)
+	}
+
+	sourceATA, _, err := solana.FindAssociatedTokenAddress(owner, mint)
+	if err != nil {
+		return "", 0, fmt.Errorf("derive source ATA: %w", err)
+	}
+	destATA, _, err := solana.FindAssociatedTokenAddress(feeWallet, mint)
+	if err != nil {
+		return "", 0, fmt.Errorf("derive dest ATA: %w", err)
+	}
+
+	// CreateIdempotent the fee wallet's ATA (no-op once it exists), then transfer.
+	createATAIx := createIdempotentATA(owner, destATA, feeWallet, mint)
+	transferIx := token.NewTransferInstruction(feeAmount, sourceATA, destATA, owner, nil).Build()
+
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{createATAIx, transferIx},
+		blockhash,
+		solana.TransactionPayer(owner),
+	)
+	if err != nil {
+		return "", 0, fmt.Errorf("build fee tx: %w", err)
+	}
+
+	out, err := tx.MarshalBinary()
+	if err != nil {
+		return "", 0, fmt.Errorf("serialize fee tx: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(out), feeAmount, nil
+}
+
+// InjectFee is retained only for its unit-tested transaction-surgery logic. It
+// is NOT used in the order flow: Jupiter pre-signs its order transactions, so
+// injecting instructions would invalidate the existing signature. Use
+// BuildFeeTransfer instead. See git history / fee_test.go for the surgery tests.
 func InjectFee(txBase64, ownerPubkey, depositMint string, depositAmount uint64) (string, uint64, error) {
 	feeWalletAddr := os.Getenv("V2_FEE_WALLET")
 	if feeWalletAddr == "" {
