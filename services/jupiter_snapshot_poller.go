@@ -56,13 +56,14 @@ func runSnapshot() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Fetch all open events across every category, enough to cover general markets.
-	// No "filter" param: Jupiter treats it as a text search, not a status filter.
+	// Fetch all open events across every category.
+	// "category=all" is a valid enum value per Jupiter docs.
+	// No "filter" or "limit" param — both are unsupported by Jupiter's API.
 	// Market status is checked in code below.
 	params := url.Values{
+		"category":       {"all"},
 		"includeMarkets": {"true"},
 		"sortBy":         {"volume"},
-		"limit":          {"200"},
 	}
 	raw, status, err := jupiter.Get(ctx, "/events", params)
 	if err != nil || status != 200 {
