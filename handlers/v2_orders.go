@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	jupiterclient "github.com/vant-xyz/backend-code/services/jupiter"
@@ -28,6 +29,20 @@ func CreateOrder(c *gin.Context) {
 	if owner == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "v2 wallet auth required"})
 		return
+	}
+
+	// Idempotency: if the client supplies a key, serialize same-key requests and
+	// replay the cached result so a double-click can't build two distinct orders.
+	// The key is scoped to the wallet so keys can't collide across users.
+	var rec *idemRecord
+	if k := c.GetHeader("Idempotency-Key"); k != "" {
+		rec = orderIdem.getOrCreate(owner + ":" + k)
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		if rec.done {
+			c.JSON(rec.status, rec.body)
+			return
+		}
 	}
 
 	var body map[string]interface{}
@@ -110,7 +125,7 @@ func CreateOrder(c *gin.Context) {
 	}
 	_ = json.Unmarshal(jupBody.Order, &orderFields)
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"transaction": modifiedTx,
 		"txMeta":      jupBody.TxMeta,
 		"order":       jupBody.Order,
@@ -125,7 +140,19 @@ func CreateOrder(c *gin.Context) {
 			"vanticFeeBps":            jupiterclient.FeeBps,
 			"newPayoutUsd":            orderFields.NewPayoutUsd,
 		},
-	})
+	}
+
+	// Cache the built order under the idempotency key so retries replay it
+	// rather than building a second order. Only successful responses are cached;
+	// failures above returned early and remain retryable.
+	if rec != nil {
+		rec.status = http.StatusOK
+		rec.body = resp
+		rec.done = true
+		rec.expiresAt = time.Now().Add(orderIdem.ttl)
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // GetPositions fetches open positions for the authenticated wallet.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gagliardetto/solana-go"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -16,6 +17,26 @@ import (
 	"github.com/vant-xyz/backend-code/services"
 	marketsvc "github.com/vant-xyz/backend-code/services/markets"
 )
+
+// validateV2Env fails fast at boot if any environment variable required for the
+// v2 (Jupiter prediction) trading flow is missing or malformed. Without these a
+// trade would only fail later, at request time, with a confusing error.
+func validateV2Env() {
+	required := []string{
+		"JUPITER_API_KEY",        // building orders / fetching events
+		"MAINNET_SOLANA_RPC_URL", // submitting signed transactions
+		"V2_FEE_WALLET",          // destination for the Vantic fee
+	}
+	for _, k := range required {
+		if strings.TrimSpace(os.Getenv(k)) == "" {
+			log.Fatalf("%s environment variable is required for v2 trading", k)
+		}
+	}
+	// V2_FEE_WALLET must be a valid pubkey or every buy will fail fee injection.
+	if _, err := solana.PublicKeyFromBase58(os.Getenv("V2_FEE_WALLET")); err != nil {
+		log.Fatalf("V2_FEE_WALLET is not a valid Solana pubkey: %v", err)
+	}
+}
 
 func splitByComma(s string) []string {
 	parts := strings.Split(s, ",")
@@ -33,6 +54,7 @@ func main() {
 	_ = godotenv.Load()
 
 	services.ValidateJWTSecret()
+	validateV2Env()
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
