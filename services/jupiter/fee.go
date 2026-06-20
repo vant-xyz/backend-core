@@ -17,6 +17,9 @@ const (
 
 	// DefaultDepositMint is mainnet USDC.
 	DefaultDepositMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+	// maxTxSize is the hard limit for a serialized Solana transaction (one packet).
+	maxTxSize = 1232
 )
 
 // CalcFee returns the Vantic fee in the same token units as depositAmount.
@@ -96,29 +99,56 @@ func InjectFee(txBase64, ownerPubkey, depositMint string, depositAmount uint64) 
 	if err != nil {
 		return "", 0, fmt.Errorf("serialize modified transaction: %w", err)
 	}
+
+	// A Solana transaction must fit in a single 1232-byte packet. Jupiter's
+	// order txs are frequently close to this limit, and our two extra
+	// instructions plus any new account keys can push it over. If so, refuse
+	// loudly rather than handing the user a tx that will be rejected on submit.
+	if len(out) > maxTxSize {
+		return "", 0, fmt.Errorf("fee injection overflowed tx size: %d > %d bytes", len(out), maxTxSize)
+	}
 	return base64.StdEncoding.EncodeToString(out), feeAmount, nil
 }
 
 // compileInstruction resolves each account meta against the transaction's
 // existing account key list, inserting missing accounts in the correct slot
 // (writable before readonly unsigned), and returns a CompiledInstruction.
+//
+// Insertion happens in two phases. Phase 1 ensures every key exists, which may
+// insert keys and shift the indices of instructions already on the message.
+// Phase 2 reads each key's FINAL index. Doing it in two phases is essential:
+// resolving the program index up front (as the previous version did) left it
+// stale once a later writable-account insert shifted the account list — which
+// silently corrupted the program reference on v0 transactions with lookup tables.
 func compileInstruction(tx *solana.Transaction, ix solana.Instruction) (solana.CompiledInstruction, error) {
 	data, err := ix.Data()
 	if err != nil {
 		return solana.CompiledInstruction{}, fmt.Errorf("instruction data: %w", err)
 	}
 
-	programIdx := findOrAddReadonly(tx, ix.ProgramID())
-
-	var accountIdxs []uint16
+	// Phase 1 — ensure all keys are present.
 	for _, meta := range ix.Accounts() {
-		var idx uint16
 		if meta.IsWritable {
-			idx = findOrAddWritable(tx, meta.PublicKey)
+			findOrAddWritable(tx, meta.PublicKey)
 		} else {
-			idx = findOrAddReadonly(tx, meta.PublicKey)
+			findOrAddReadonly(tx, meta.PublicKey)
 		}
-		accountIdxs = append(accountIdxs, idx)
+	}
+	findOrAddReadonly(tx, ix.ProgramID())
+
+	// Phase 2 — read final indices now that no further insertions will occur
+	// for this instruction.
+	programIdx, ok := findAccount(tx, ix.ProgramID())
+	if !ok {
+		return solana.CompiledInstruction{}, fmt.Errorf("program key missing after insert")
+	}
+	accountIdxs := make([]uint16, len(ix.Accounts()))
+	for i, meta := range ix.Accounts() {
+		idx, ok := findAccount(tx, meta.PublicKey)
+		if !ok {
+			return solana.CompiledInstruction{}, fmt.Errorf("account key missing after insert")
+		}
+		accountIdxs[i] = idx
 	}
 
 	return solana.CompiledInstruction{
@@ -147,12 +177,20 @@ func findOrAddWritable(tx *solana.Transaction, key solana.PublicKey) uint16 {
 }
 
 // findOrAddReadonly returns the index of key in AccountKeys, appending it as
-// a readonly unsigned account if absent.
+// a readonly unsigned static account if absent.
+//
+// The new key lands at the end of the STATIC key list, which on a versioned
+// (v0) transaction is exactly where the lookup-table accounts begin in the
+// virtual account ordering. Every existing instruction index at or beyond that
+// boundary therefore refers to a lookup-table account that has just shifted up
+// by one, so we must shift those references too. On a legacy transaction there
+// are no such indices and shiftIndices is a no-op.
 func findOrAddReadonly(tx *solana.Transaction, key solana.PublicKey) uint16 {
 	if idx, ok := findAccount(tx, key); ok {
 		return idx
 	}
 	idx := uint16(len(tx.Message.AccountKeys))
+	shiftIndices(tx, idx)
 	tx.Message.AccountKeys = append(tx.Message.AccountKeys, key)
 	tx.Message.Header.NumReadonlyUnsignedAccounts++
 	return idx

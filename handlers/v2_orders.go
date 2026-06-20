@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -89,10 +90,13 @@ func CreateOrder(c *gin.Context) {
 	if isBuy && depositAmount > 0 && jupBody.Transaction != "" {
 		modifiedTx, feeAmount, err = jupiterclient.InjectFee(jupBody.Transaction, owner, depositMint, depositAmount)
 		if err != nil {
-			// Non-fatal: log and return Jupiter's tx unchanged.
-			// In production you'd want stricter failure here.
-			modifiedTx = jupBody.Transaction
-			feeAmount = 0
+			// Fail the order rather than silently returning Jupiter's tx with no
+			// fee. A silent fallback here means we hand the user an order we earn
+			// nothing on and never find out. Log loudly and surface a 502.
+			log.Printf("[v2/orders] FEE INJECTION FAILED owner=%s market=%v deposit=%d: %v",
+				owner, body["marketId"], depositAmount, err)
+			c.JSON(http.StatusBadGateway, gin.H{"message": "could not build order, please try again"})
+			return
 		}
 	}
 
