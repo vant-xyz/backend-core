@@ -12,7 +12,7 @@ import (
 )
 
 // snapshotInterval controls how often we capture price snapshots.
-const snapshotInterval = 15 * time.Minute
+const snapshotInterval = 1 * time.Minute
 
 type jupMarketPricing struct {
 	BuyYesPriceUsd int64 `json:"buyYesPriceUsd"`
