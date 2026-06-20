@@ -56,11 +56,13 @@ func runSnapshot() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Fetch active sports events (World Cup + any other live events).
+	// Fetch active sports events — mirrors the existing World Cup handler params.
+	// No "filter" param: Jupiter treats it as a text search, not a status filter.
+	// Market status is checked in code below.
 	params := url.Values{
 		"category":       {"sports"},
+		"tags":           {"soccer"},
 		"includeMarkets": {"true"},
-		"filter":         {"open"},
 	}
 	raw, status, err := jupiter.Get(ctx, "/events", params)
 	if err != nil || status != 200 {
