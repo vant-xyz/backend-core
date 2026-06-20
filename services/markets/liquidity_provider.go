@@ -198,6 +198,10 @@ func StartGlobalLiquidityManager() {
 	if isMainnet {
 		return
 	}
+	if !envBool("LP_ENABLED", true) {
+		log.Println("[LiquidityManager] Disabled via LP_ENABLED=false")
+		return
+	}
 
 	ctx := context.Background()
 	markets, err := db.GetActiveMarkets(ctx)
