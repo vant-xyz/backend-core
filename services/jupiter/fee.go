@@ -9,8 +9,10 @@ import (
 	"github.com/gagliardetto/solana-go/programs/token"
 )
 
-// ataProgramID is the Associated Token Account program.
-var ataProgramID = solana.MustPublicKeyFromBase58("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bN8")
+// ataProgramID is the Associated Token Account program. Use solana-go's
+// canonical constant rather than a hardcoded string — an earlier hardcoded
+// value had a typo in the last characters, producing ProgramAccountNotFound.
+var ataProgramID = solana.SPLAssociatedTokenAccountProgramID
 
 const (
 	FeeBps = 50 // 0.5%
