@@ -48,6 +48,7 @@ func main() {
 	db.InitRedis()
 
 	services.StartPricePoller()
+	services.StartJupiterSnapshotPoller()
 	marketsvc.StartCAPPMService()
 	marketsvc.StartGlobalLiquidityManager()
 	marketsvc.GetMatchingEngine()
@@ -106,6 +107,7 @@ func main() {
 		v2.GET("/events/:id", handlers.GetEvent)
 		v2.GET("/events/:id/score", handlers.GetEventScore)
 		v2.GET("/events/:id/markets", handlers.GetEventMarkets)
+		v2.GET("/events/:id/price-history", handlers.GetEventPriceHistory)
 
 		// markets + orderbook (public)
 		v2.GET("/markets/:id", handlers.GetMarket)
