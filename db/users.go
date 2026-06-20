@@ -349,6 +349,70 @@ func CreateOAuthUser(ctx context.Context, email, name, profileImageURL, provider
 	return &user, nil
 }
 
+func GetUserByWalletPubkey(ctx context.Context, walletPubkey string) (*models.User, error) {
+	row := Pool.QueryRow(ctx, `
+		SELECT email, name, full_name, username, COALESCE(password, ''),
+		       vant_id, balance_id, socials, profile_image_url, created_at
+		FROM users WHERE wallet_pubkey = $1
+	`, walletPubkey)
+	var u models.User
+	if err := row.Scan(
+		&u.Email, &u.Name, &u.FullName, &u.Username, &u.Password,
+		&u.VantID, &u.BalanceID, &u.Socials, &u.ProfileImageURL, &u.CreatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("user not found: %s", walletPubkey)
+		}
+		return nil, fmt.Errorf("failed to get user by wallet: %w", err)
+	}
+	return &u, nil
+}
+
+// CreateV2User creates a non-custodial v2 user identified by wallet pubkey.
+// No password or custodial wallets are created — the wallet_pubkey is also
+// used as the email PK since email is TEXT with no DB-level format constraint.
+func CreateV2User(ctx context.Context, walletPubkey string) (*models.User, error) {
+	balanceID := fmt.Sprintf("BAL_%s", utils.RandomAlphanumeric(10))
+	vantID := fmt.Sprintf("VANTID_%s", utils.RandomNumbers(8))
+	username := fmt.Sprintf("@user%s", utils.RandomAlphanumeric(6))
+	now := time.Now()
+
+	tx, err := Pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	user := models.User{
+		Email:     walletPubkey,
+		Username:  username,
+		VantID:    vantID,
+		BalanceID: balanceID,
+		Socials:   []string{},
+		CreatedAt: now,
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (email, name, full_name, username, password, vant_id, balance_id,
+		                   socials, profile_image_url, created_at, wallet_pubkey, account_version)
+		VALUES ($1, '', '', $2, NULL, $3, $4, $5, '', $6, $7, 'v2')
+	`, walletPubkey, username, vantID, balanceID, user.Socials, now, walletPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert v2 user: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `INSERT INTO balances (id, email) VALUES ($1, $2)`, balanceID, walletPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert balance: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit v2 user creation: %w", err)
+	}
+
+	return &user, nil
+}
+
 func UpdateUsername(ctx context.Context, email, username string) error {
 	exists, err := CheckUsernameExists(ctx, username)
 	if err != nil {

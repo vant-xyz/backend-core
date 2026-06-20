@@ -15,7 +15,11 @@ func APIKeyMiddleware() gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if path == "/health" || strings.HasPrefix(path, "/docs") || path == "/auth/google" || path == "/auth/google/callback" {
+		if path == "/health" ||
+			strings.HasPrefix(path, "/docs") ||
+			path == "/v1/auth/google" ||
+			path == "/v1/auth/google/callback" ||
+			strings.HasPrefix(path, "/v2/auth/") {
 			c.Next()
 			return
 		}

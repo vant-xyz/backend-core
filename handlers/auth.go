@@ -171,14 +171,23 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		email, err := services.VerifyJWT(parts[1])
+		claims, err := services.ParseJWTClaims(parts[1])
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid or expired token"})
 			c.Abort()
 			return
 		}
 
-		c.Set("email", email)
+		if email, ok := claims["email"].(string); ok && email != "" {
+			c.Set("email", email)
+		} else if wp, ok := claims["wallet_pubkey"].(string); ok && wp != "" {
+			c.Set("wallet_pubkey", wp)
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid token claims"})
+			c.Abort()
+			return
+		}
+
 		c.Next()
 	}
 }

@@ -86,133 +86,161 @@ func main() {
 		c.JSON(http.StatusNotFound, gin.H{"message": "not found"})
 	})
 
-	// ── Docs ──────────────────────────────────────────────────────────────────
+	// ── Docs & Health (root, unversioned) ────────────────────────────────────
 	r.GET("/docs", swaggerUIHandler)
 	r.GET("/docs/swagger.yaml", swaggerSpecHandler)
-
-	// ── Public ────────────────────────────────────────────────────────────────
-	r.POST("/waitlist", handlers.JoinWaitlist)
 	r.GET("/health", handlers.HealthCheck)
 
-	r.GET("/prices", handlers.GetPrices)
-	r.GET("/prices/vant", handlers.GetVantPrices)
-	r.GET("/prices/vant/:asset", handlers.GetAssetPrice)
-	r.GET("/prices/tokens", handlers.GetJupiterTokenPrices)
-
-	r.POST("/auth/exists", handlers.CheckEmailExists)
-	r.POST("/auth/username/exists", handlers.CheckUsername)
-	r.POST("/auth", handlers.Auth)
-	r.GET("/auth/google", handlers.GoogleLogin)
-	r.GET("/auth/google/callback", handlers.GoogleCallback)
-
-	internal := r.Group("/internal")
-	internal.Use(handlers.IndexerKeyMiddleware())
+	// ── v2 API ────────────────────────────────────────────────────────────────
+	v2 := r.Group("/v2")
 	{
-		internal.GET("/wallets", handlers.GetInternalWallets)
-		internal.POST("/deposit", handlers.HandleInternalDeposit)
+		// auth (public)
+		v2.GET("/auth/nonce", handlers.GetNonce)
+		v2.POST("/auth/verify", handlers.VerifyWallet)
+
+		// events (public) — static paths must be registered before :id wildcard
+		v2.GET("/events/worldcup", handlers.GetWorldCupEvents)
+		v2.GET("/events/search", handlers.SearchEvents)
+		v2.GET("/events/scores", handlers.GetEventScores)
+		v2.GET("/events", handlers.GetEvents)
+		v2.GET("/events/:id", handlers.GetEvent)
+		v2.GET("/events/:id/score", handlers.GetEventScore)
+		v2.GET("/events/:id/markets", handlers.GetEventMarkets)
+
+		// markets + orderbook (public)
+		v2.GET("/markets/:id", handlers.GetMarket)
+		v2.GET("/orderbook/:id", handlers.GetOrderbook)
+		v2.GET("/trading-status", handlers.GetTradingStatus)
+
+		// transactions (requires signed tx from wallet)
+		v2.POST("/transactions/submit", handlers.SubmitTransaction)
+
+		// orders + positions (v2 JWT required)
+		v2auth := v2.Group("/")
+		v2auth.Use(handlers.AuthMiddleware())
+		{
+			v2auth.POST("/orders", handlers.CreateOrder)
+			v2auth.GET("/positions", handlers.GetPositions)
+			v2auth.DELETE("/positions/:positionPubkey", handlers.ClosePosition)
+			v2auth.POST("/positions/:positionPubkey/claim", handlers.ClaimPosition)
+		}
 	}
 
-	r.GET("/leaderboard", handlers.GetLeaderboard)
-
-	// ── Markets — public ──────────────────────────────────────────────────────
-	// GET /markets?type=CAPPM&status=active   → crypto tab feed
-	// GET /markets?type=GEM&status=active     → general tab feed
-	// GET /markets?status=resolved            → history feed
-	r.GET("/markets", handlersmarkets.GetMarkets)
-	r.GET("/markets/:id", handlersmarkets.GetMarket)
-	r.GET("/markets/:id/orderbook", handlersmarkets.GetOrderbook)
-	r.GET("/markets/:id/orderbook/depth", handlersmarkets.GetOrderbookDepth)
-	r.GET("/markets/:id/candles", handlersmarkets.GetMarketCandles)
-	r.GET("/markets/:id/opinion-trend", handlersmarkets.GetMarketOpinionTrend)
-	r.GET("/markets/:id/volume", handlersmarkets.GetMarketVolume)
-	r.GET("/markets/:id/stats", handlersmarkets.GetMarketStats)
-	r.GET("/markets/:id/history", handlersmarkets.GetMarketHistory)
-	r.GET("/markets/:id/quote", handlersmarkets.GetMarketFillPreview)
-	r.GET("/markets/:id/trades", handlersmarkets.GetMarketTrades)
-
-	// OVM — Onchain Verifiable Markets
-	// Returns Postgres record + raw Solana account state + explorer URLs
-	r.GET("/markets/:id/onchain", handlersmarkets.GetMarketOnchain)
-	r.GET("/markets/onchain", handlersmarkets.GetMarketsOnchain)
-
-	// ── Authenticated ─────────────────────────────────────────────────────────
-	auth := r.Group("/")
-	auth.Use(handlers.AuthMiddleware())
+	// ── v1 API ────────────────────────────────────────────────────────────────
+	v1 := r.Group("/v1")
 	{
-		auth.GET("/user", handlers.GetUserProfile)
-		auth.PUT("/user", handlers.UpdateUserProfile)
-		auth.POST("/user/profile-image", handlers.UploadProfileImage)
-		auth.POST("/auth/username", handlers.UpdateUsername)
-		auth.POST("/auth/logout", handlers.Logout)
+		// ── Public ────────────────────────────────────────────────────────────
+		v1.POST("/waitlist", handlers.JoinWaitlist)
 
-		auth.GET("/balance", handlers.GetUserBalance)
-		auth.GET("/balance/wsol", handlers.GetUserWSOLBalance)
-		auth.GET("/balance/sync", handlers.SyncBalance)
-		auth.POST("/balance/sell", handlers.SellAsset)
-		auth.POST("/balance/withdraw", handlers.WithdrawBalance)
-		auth.POST("/balance/withdraw/asset", handlers.WithdrawAsset)
-		auth.POST("/balance/convert/usdc", handlers.ConvertToUSDC)
-		auth.GET("/transactions", handlers.GetTransactions)
-		auth.POST("/transactions/email", handlers.SendTransactionEmail)
-		auth.POST("/demo/fund", handlers.FundDemoAccount)
+		v1.GET("/prices", handlers.GetPrices)
+		v1.GET("/prices/vant", handlers.GetVantPrices)
+		v1.GET("/prices/vant/:asset", handlers.GetAssetPrice)
+		v1.GET("/prices/tokens", handlers.GetJupiterTokenPrices)
 
-		// Orders & positions
-		auth.POST("/orders", handlersmarkets.PlaceOrder)
-		auth.POST("/markets/:id/buy", handlersmarkets.BuyOrder)
-		auth.POST("/markets/:id/sell", handlersmarkets.SellOrder)
-		auth.POST("/markets/:id/quote", handlersmarkets.ReserveMarketQuote)
-		auth.POST("/markets/:id/quote/accept", handlersmarkets.AcceptMarketQuote)
-		auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
-		auth.GET("/leaderboard/me", handlers.GetMyLeaderboardRank)
-		auth.GET("/orders", handlersmarkets.GetUserOrders)
-		auth.GET("/positions", handlersmarkets.GetUserPositions)
-		auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
-		auth.POST("/vs/events", handlers.CreateVSEvent)
-		auth.GET("/vs/events", handlers.ListVSEvents)
-		auth.GET("/vs/events/mine/created", handlers.ListMyCreatedVSEvents)
-		auth.GET("/vs/events/mine/joined", handlers.ListMyJoinedVSEvents)
-		auth.GET("/vs/events/:id", handlers.GetVSEvent)
-		auth.POST("/vs/events/:id/join", handlers.JoinVSEvent)
-		auth.POST("/vs/events/:id/confirm", handlers.ConfirmVSEvent)
-		auth.POST("/vs/events/:id/cancel", handlers.CancelVSEvent)
+		v1.POST("/auth/exists", handlers.CheckEmailExists)
+		v1.POST("/auth/username/exists", handlers.CheckUsername)
+		v1.POST("/auth", handlers.Auth)
+		v1.GET("/auth/google", handlers.GoogleLogin)
+		v1.GET("/auth/google/callback", handlers.GoogleCallback)
 
-		// WebSockets
-		// /ws             → live price feed (BTC, ETH, SOL every 5s)
-		//                   also pushes BALANCE_UPDATE with full balance object
-		// /ws/markets/:id/orderbook → live orderbook depth + fills for a market
-		auth.GET("/ws", func(c *gin.Context) {
-			email, _ := c.Get("email")
-			services.HandlePriceWS(c.Writer, c.Request, email.(string))
-		})
-		auth.GET("/ws/markets/:id/orderbook", handlersmarkets.HandleOrderbookWS)
-	}
+		v1internal := v1.Group("/internal")
+		v1internal.Use(handlers.IndexerKeyMiddleware())
+		{
+			v1internal.GET("/wallets", handlers.GetInternalWallets)
+			v1internal.POST("/deposit", handlers.HandleInternalDeposit)
+		}
 
-	// ── Admin ─────────────────────────────────────────────────────────────────
-	admin := r.Group("/admin")
-	admin.Use(handlers.AdminAuthMiddleware())
-	{
-		admin.GET("/ping", handlers.AdminPing)
-		admin.POST("/upload", handlers.AdminUploadImage)
-		admin.POST("/markets/gem", handlersmarkets.CreateMarketGEM)
-		admin.POST("/markets/cappm", handlersmarkets.CreateMarketCAPPMAdmin)
-		admin.POST("/markets/:id/settle", handlersmarkets.SettleMarketGEM)
-		admin.POST("/markets/:id/sync", handlersmarkets.SyncMarket)
-		admin.POST("/markets/:id/force-settle", handlers.ForceSettleMarket)
-		admin.GET("/markets", handlers.GetAllMarkets)
-		admin.GET("/markets/search", handlers.SearchAdminMarkets)
-		admin.GET("/markets/:id/stats", handlers.GetMarketStats)
-		admin.GET("/orders", handlers.GetAllOrders)
-		admin.GET("/users/:email/exposure", handlers.GetUserExposure)
-		admin.GET("/cappm/status", handlers.GetCAPPMStatus)
-		admin.GET("/cappm/price", handlers.GetCAPPMPrice)
-		admin.POST("/markets/:id/cappm-settle", handlers.ForceSettleCAPPM)
-		admin.GET("/overview", handlers.GetOverview)
-		admin.GET("/users", handlers.GetAdminUsers)
-		admin.GET("/users/:email", handlers.GetAdminUser)
-		admin.POST("/fee-wallet/dump-usdc", handlers.DumpFeeWalletToUSDC)
-		admin.POST("/untether-reserve/:wallet_type", handlers.UntetherReserve)
-		admin.GET("/reserve-wallets/balances", handlers.GetReserveWalletBalances)
-		admin.POST("/bots/fund", handlers.FundBotAccounts)
+		v1.GET("/leaderboard", handlers.GetLeaderboard)
+
+		// ── Markets — public ──────────────────────────────────────────────────
+		v1.GET("/markets", handlersmarkets.GetMarkets)
+		v1.GET("/markets/:id", handlersmarkets.GetMarket)
+		v1.GET("/markets/:id/orderbook", handlersmarkets.GetOrderbook)
+		v1.GET("/markets/:id/orderbook/depth", handlersmarkets.GetOrderbookDepth)
+		v1.GET("/markets/:id/candles", handlersmarkets.GetMarketCandles)
+		v1.GET("/markets/:id/opinion-trend", handlersmarkets.GetMarketOpinionTrend)
+		v1.GET("/markets/:id/volume", handlersmarkets.GetMarketVolume)
+		v1.GET("/markets/:id/stats", handlersmarkets.GetMarketStats)
+		v1.GET("/markets/:id/history", handlersmarkets.GetMarketHistory)
+		v1.GET("/markets/:id/quote", handlersmarkets.GetMarketFillPreview)
+		v1.GET("/markets/:id/trades", handlersmarkets.GetMarketTrades)
+		v1.GET("/markets/:id/onchain", handlersmarkets.GetMarketOnchain)
+		v1.GET("/markets/onchain", handlersmarkets.GetMarketsOnchain)
+
+		// ── Authenticated ─────────────────────────────────────────────────────
+		v1auth := v1.Group("/")
+		v1auth.Use(handlers.AuthMiddleware())
+		{
+			v1auth.GET("/user", handlers.GetUserProfile)
+			v1auth.PUT("/user", handlers.UpdateUserProfile)
+			v1auth.POST("/user/profile-image", handlers.UploadProfileImage)
+			v1auth.POST("/auth/username", handlers.UpdateUsername)
+			v1auth.POST("/auth/logout", handlers.Logout)
+
+			v1auth.GET("/balance", handlers.GetUserBalance)
+			v1auth.GET("/balance/wsol", handlers.GetUserWSOLBalance)
+			v1auth.GET("/balance/sync", handlers.SyncBalance)
+			v1auth.POST("/balance/sell", handlers.SellAsset)
+			v1auth.POST("/balance/withdraw", handlers.WithdrawBalance)
+			v1auth.POST("/balance/withdraw/asset", handlers.WithdrawAsset)
+			v1auth.POST("/balance/convert/usdc", handlers.ConvertToUSDC)
+			v1auth.GET("/transactions", handlers.GetTransactions)
+			v1auth.POST("/transactions/email", handlers.SendTransactionEmail)
+			v1auth.POST("/demo/fund", handlers.FundDemoAccount)
+
+			v1auth.POST("/orders", handlersmarkets.PlaceOrder)
+			v1auth.POST("/markets/:id/buy", handlersmarkets.BuyOrder)
+			v1auth.POST("/markets/:id/sell", handlersmarkets.SellOrder)
+			v1auth.POST("/markets/:id/quote", handlersmarkets.ReserveMarketQuote)
+			v1auth.POST("/markets/:id/quote/accept", handlersmarkets.AcceptMarketQuote)
+			v1auth.DELETE("/orders/:id", handlersmarkets.CancelOrder)
+			v1auth.GET("/leaderboard/me", handlers.GetMyLeaderboardRank)
+			v1auth.GET("/orders", handlersmarkets.GetUserOrders)
+			v1auth.GET("/positions", handlersmarkets.GetUserPositions)
+			v1auth.POST("/positions/:id/close", handlersmarkets.ClosePosition)
+			v1auth.POST("/vs/events", handlers.CreateVSEvent)
+			v1auth.GET("/vs/events", handlers.ListVSEvents)
+			v1auth.GET("/vs/events/mine/created", handlers.ListMyCreatedVSEvents)
+			v1auth.GET("/vs/events/mine/joined", handlers.ListMyJoinedVSEvents)
+			v1auth.GET("/vs/events/:id", handlers.GetVSEvent)
+			v1auth.POST("/vs/events/:id/join", handlers.JoinVSEvent)
+			v1auth.POST("/vs/events/:id/confirm", handlers.ConfirmVSEvent)
+			v1auth.POST("/vs/events/:id/cancel", handlers.CancelVSEvent)
+
+			v1auth.GET("/ws", func(c *gin.Context) {
+				email, _ := c.Get("email")
+				services.HandlePriceWS(c.Writer, c.Request, email.(string))
+			})
+			v1auth.GET("/ws/markets/:id/orderbook", handlersmarkets.HandleOrderbookWS)
+		}
+
+		// ── Admin ─────────────────────────────────────────────────────────────
+		v1admin := v1.Group("/admin")
+		v1admin.Use(handlers.AdminAuthMiddleware())
+		{
+			v1admin.GET("/ping", handlers.AdminPing)
+			v1admin.POST("/upload", handlers.AdminUploadImage)
+			v1admin.POST("/markets/gem", handlersmarkets.CreateMarketGEM)
+			v1admin.POST("/markets/cappm", handlersmarkets.CreateMarketCAPPMAdmin)
+			v1admin.POST("/markets/:id/settle", handlersmarkets.SettleMarketGEM)
+			v1admin.POST("/markets/:id/sync", handlersmarkets.SyncMarket)
+			v1admin.POST("/markets/:id/force-settle", handlers.ForceSettleMarket)
+			v1admin.GET("/markets", handlers.GetAllMarkets)
+			v1admin.GET("/markets/search", handlers.SearchAdminMarkets)
+			v1admin.GET("/markets/:id/stats", handlers.GetMarketStats)
+			v1admin.GET("/orders", handlers.GetAllOrders)
+			v1admin.GET("/users/:email/exposure", handlers.GetUserExposure)
+			v1admin.GET("/cappm/status", handlers.GetCAPPMStatus)
+			v1admin.GET("/cappm/price", handlers.GetCAPPMPrice)
+			v1admin.POST("/markets/:id/cappm-settle", handlers.ForceSettleCAPPM)
+			v1admin.GET("/overview", handlers.GetOverview)
+			v1admin.GET("/users", handlers.GetAdminUsers)
+			v1admin.GET("/users/:email", handlers.GetAdminUser)
+			v1admin.POST("/fee-wallet/dump-usdc", handlers.DumpFeeWalletToUSDC)
+			v1admin.POST("/untether-reserve/:wallet_type", handlers.UntetherReserve)
+			v1admin.GET("/reserve-wallets/balances", handlers.GetReserveWalletBalances)
+			v1admin.POST("/bots/fund", handlers.FundBotAccounts)
+		}
 	}
 
 	port := os.Getenv("PORT")
