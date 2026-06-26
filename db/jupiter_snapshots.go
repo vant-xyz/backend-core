@@ -49,6 +49,25 @@ func GetEventPriceHistory(ctx context.Context, eventID string, since time.Time) 
 	return out, rows.Err()
 }
 
+// PruneEndedEventSnapshots deletes all snapshots for events that have received
+// no new snapshot within idleFor — i.e. the match/event is over and we no longer
+// need its price history. Returns the number of rows deleted. Active events keep
+// getting fresh snapshots so they are never idle and never pruned.
+func PruneEndedEventSnapshots(ctx context.Context, idleFor time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-idleFor)
+	tag, err := Pool.Exec(ctx, `
+		DELETE FROM jupiter_market_snapshots
+		WHERE event_id IN (
+			SELECT event_id FROM jupiter_market_snapshots
+			GROUP BY event_id
+			HAVING MAX(recorded_at) < $1
+		)`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func nullIfZero(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil

@@ -12,7 +12,12 @@ import (
 )
 
 // snapshotInterval controls how often we capture price snapshots.
-const snapshotInterval = 1 * time.Minute
+const snapshotInterval = 10 * time.Minute
+
+// endedEventIdle is how long an event can go without a new snapshot before we
+// consider its match over and prune its history. Comfortably longer than the
+// snapshot interval so a brief gap never drops an active event.
+const endedEventIdle = 6 * time.Hour
 
 type jupMarketPricing struct {
 	BuyYesPriceUsd int64 `json:"buyYesPriceUsd"`
@@ -104,5 +109,13 @@ func runSnapshot() {
 
 	if saved > 0 {
 		log.Printf("[JupiterPoller] Saved %d market snapshots at %s", saved, time.Now().Format(time.RFC3339))
+
+		// Prune history for ended matches. Gated on a successful save so a broken
+		// or paused poller can never wipe data (every event would look "idle").
+		if pruned, err := db.PruneEndedEventSnapshots(ctx, endedEventIdle); err != nil {
+			log.Printf("[JupiterPoller] prune error: %v", err)
+		} else if pruned > 0 {
+			log.Printf("[JupiterPoller] Pruned %d snapshots for ended matches", pruned)
+		}
 	}
 }
