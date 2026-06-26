@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -66,6 +67,45 @@ func PruneEndedEventSnapshots(ctx context.Context, idleFor time.Duration) (int64
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// PruneAndReclaim is a one-off recovery used at startup when the DB has filled
+// up. Aiven flips the service to read-only when the disk is full, so we override
+// that for THIS session (per Aiven's docs), delete snapshots for ended matches,
+// then VACUUM FULL to return the freed disk to the OS — which is what drops disk
+// usage below Aiven's threshold and clears the read-only state. Returns rows
+// deleted. Guard the call behind an env flag; it's idempotent so re-running is
+// harmless.
+func PruneAndReclaim(ctx context.Context, idleFor time.Duration) (int64, error) {
+	conn, err := Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Release()
+
+	// Enable writes for this session even while the DB-wide failsafe is on.
+	if _, err := conn.Exec(ctx, "SET default_transaction_read_only = OFF"); err != nil {
+		return 0, fmt.Errorf("enable session writes: %w", err)
+	}
+
+	cutoff := time.Now().Add(-idleFor)
+	tag, err := conn.Exec(ctx, `
+		DELETE FROM jupiter_market_snapshots
+		WHERE event_id IN (
+			SELECT event_id FROM jupiter_market_snapshots
+			GROUP BY event_id
+			HAVING MAX(recorded_at) < $1
+		)`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune delete: %w", err)
+	}
+	deleted := tag.RowsAffected()
+
+	// VACUUM cannot run in a transaction; conn.Exec autocommits, so this is fine.
+	if _, err := conn.Exec(ctx, "VACUUM FULL jupiter_market_snapshots"); err != nil {
+		return deleted, fmt.Errorf("vacuum full: %w", err)
+	}
+	return deleted, nil
 }
 
 func nullIfZero(t time.Time) *time.Time {

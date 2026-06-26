@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gin-contrib/cors"
@@ -62,6 +63,21 @@ func main() {
 	}
 	db.Init(databaseURL)
 	defer db.Close()
+
+	// One-off disk recovery: when PRUNE_SNAPSHOTS_ON_START is set, prune ended-
+	// match price history and reclaim disk BEFORE migrations (migrations write,
+	// so they fail while the disk-full read-only failsafe is on). Best-effort —
+	// never blocks boot. Remove the env var once the disk is healthy again.
+	if os.Getenv("PRUNE_SNAPSHOTS_ON_START") == "true" {
+		log.Println("[Startup] PRUNE_SNAPSHOTS_ON_START set — pruning ended-match snapshots…")
+		pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if n, err := db.PruneAndReclaim(pctx, 24*time.Hour); err != nil {
+			log.Printf("[Startup] prune failed (continuing): %v", err)
+		} else {
+			log.Printf("[Startup] pruned %d snapshots and reclaimed disk", n)
+		}
+		pcancel()
+	}
 
 	if err := db.RunMigrations(context.Background()); err != nil {
 		log.Fatalf("[Migrate] Fatal: %v", err)
